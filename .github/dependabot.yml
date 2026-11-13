@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  # Cargo, not a lockfile-less ecosystem: Cargo.lock is committed and `--locked` is used
+  # everywhere, so a resolved set that differs from the lock is a CI failure, not a PR.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      all-non-major:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(ci)
+    groups:
+      all-non-major:
+        update-types:
+          - minor
+          - patch

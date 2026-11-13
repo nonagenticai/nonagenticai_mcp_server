@@ -1,0 +1,69 @@
+# Parity contract between the Python source service(s) and this Rust target.
+# Read by the coding-testing parity ops (schema-diff / openapi-diff / record+replay).
+# Filled in by the conveyor's rewrite_plan card (user confirms); values below are placeholders.
+
+# Source repositories being ported, as owner/name. One entry, or several when this target
+# merges services (openapi-diff then compares against the UNION of their specs).
+#
+# The PUBLIC archive, not the private one: the reference implementation's history was
+# published unscrubbed at `nonagenticai_mcp_server-python-archive`, and its tip emits a
+# byte-for-byte identical OpenAPI document to the private pre-scrub SHA this contract
+# originally pinned (measured 2026-11-14: both 77,612 bytes, `cmp` clean). Pinning the
+# public repo means the oracle can be fetched and replayed by anyone, and no private
+# repository path appears in this tree.
+source_repos = ["nonagenticai/nonagenticai_mcp_server-python-archive"]
+
+# Pinned source commits, same order and length as source_repos. Parity is only valid
+# against pinned SHAs (gate G4) - never a branch name.
+source_shas = ["22ac1ce4d1b8129a543832b8ed86fe0e1c0c7fe4"]
+
+# How to obtain each source's OpenAPI document, same order as source_repos: a path inside
+# that source repo at its pinned SHA, or a command run in its checkout that prints JSON.
+# The source disables FastAPI's served docs (openapi_url=None) but its app object still
+# generates the document; this command prints it with no env and no database.
+source_openapi = ['uv run --frozen python -c "import json; from src.asgi import create_app; print(json.dumps(create_app().openapi()))"']
+
+# Command, run in this repo, that prints this service's OpenAPI JSON to stdout.
+target_openapi_cmd = "cargo run --locked --quiet -- --print-openapi"
+
+# Recorded/hand-written requests replayed against both stacks (JSON Lines, one request
+# per line; trusted X-Tenant-* headers included as the edge would send them).
+requests_file = "parity/requests.jsonl"
+
+# External systems the service calls. During replay each is served by the workspace's
+# ws-upstream stub from fixtures, and the outbound-call sequence is part of the diff.
+# One table per upstream:
+#
+# [[upstreams]]
+# name = "github"                       # label used in fixtures and diffs
+# env = "GITHUB_API_URL"                # env var holding the base URL in BOTH stacks
+# fixtures = "parity/upstreams/github"  # recorded responses / OpenAPI examples
+upstreams = []
+
+# ── openapi-diff exclusions ────────────────────────────────────────────────────────────────
+# Every source operation that is NOT yet ported, grouped by the phase that ports it. This is
+# the "explicit reviewed exclusion list" the rewrite plan allows: the diff is `equal` only
+# with these applied AND with no other difference. A phase deletes its own group as it lands,
+# so the list only ever shrinks. Reviewed 2026-11-13 against
+# nonagenticai/nonagenticai_mcp_server-archive@dd2cabf (108 source operations; the four health
+# operations are ported and therefore NOT listed).
+#
+#   phase 2  catalog read + MCP projection: available-tools, tools, toolkits, bindings
+#   phase 3  execution control: runs
+#   phase 5  builder, sources, services, operations, credential profiles, internal mirrors
+#   phase 6  the fr channel
+[openapi_diff.ignore]
+paths = [
+  "/mcp/available-tools",       # phase 2
+  "/mcp/tools*",                # phase 2
+  "/mcp/toolkits*",             # phase 2
+  "/mcp/bindings*",             # phase 2
+  "/mcp/runs*",                 # phase 3
+  "/mcp/builder*",              # phase 5
+  "/mcp/internal*",             # phase 5 (the tenant-scoped mirrors of builder/sources)
+  "/mcp/sources*",              # phase 5
+  "/mcp/services*",             # phase 5
+  "/mcp/operations*",           # phase 5
+  "/mcp/credential-profiles*",  # phase 5
+  "/api/channels/fr/events",    # phase 6
+]

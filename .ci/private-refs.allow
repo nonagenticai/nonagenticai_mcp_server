@@ -1,0 +1,14 @@
+# Allowlist for scripts/ci/no-private-refs.sh — a security decision, not a convenience.
+#
+# One rule per line, `path/glob:pattern  # justification`. The glob matches the repo-relative
+# path; the pattern is an ERE matched against the whole `git grep` hit (`path:line:text`).
+# Blank lines and `#` comments are ignored. A justification is mandatory in review.
+#
+# ⛔ Do NOT add an entry to keep a real internal hostname, address or private repository path
+# in a public tree. Remove it instead. An entry is only for a string that *looks* private but
+# is not: a documented loopback example, a placeholder, or a term that collides with a rule.
+#
+# The guard and this file necessarily spell the patterns out; the guard excludes both from
+# its own scan. Everything else is scanned.
+#
+# No entries by default. An empty file that fails the build is the correct starting state.

@@ -1,0 +1,104 @@
+# Created from nonagenticai/template-rust-service (scripts/rename.sh sets the real name).
+[package]
+name = "mcp-server-rs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Executable catalog MCP server — tenant-scoped tool discovery and invocation over the Model Context Protocol"
+license = "Apache-2.0"
+
+[lib]
+name = "mcp_server_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mcp-server-rs"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.53.3", features = ["full"] }
+axum = "0.8.9"
+# Runtime queries only (sqlx::query / query_as with binds). Never the compile-time
+# `query!` macros: they need a live DB (or an offline cache) at build time. `macros` is
+# here for `sqlx::migrate!`, which only embeds migrations/ and needs no DB.
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "migrate",
+    "macros",
+    "json",
+] }
+utoipa = { version = "6.0.0", features = ["axum_extras"] }
+utoipa-axum = "0.3.0"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+thiserror = "2.0.21"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tower-http = { version = "0.7.1", features = ["trace"] }
+rmcp = { version = "3.9.0", features = ["server", "transport-streamable-http-server"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1.5"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⛔ DO NOT REMOVE. THIS LINE IS THE ESTATE'S SINGLE SOURCE OF TRUTH FOR RUST
+# BUILD SIZE, AND IT IS WHY A SERVICE BUILD DOES NOT EAT TENS OF GIGABYTES.
+#
+# Measured 2026-11-08: a Rust workspace with 387 dependencies reached 53 GiB of
+# `target/debug` on a 228 GiB Mac (40 GiB `deps`, 9.8 GiB `incremental`) and took
+# the disk to 12.8 GiB free. The cause was cargo's DEFAULT dev profile, which is
+# `debug = 2` — full DWARF for every crate. Nothing in that repo's Cargo.toml
+# said so; the default simply applies when you say nothing, which is what a
+# template that says nothing silently hands to every service created from it.
+#
+# `debug = 1` keeps line tables, so a `panic!` backtrace still names file:line —
+# losing that to save disk would trade away the thing you reach for at 3am — and
+# drops the full type/variable information, which is the bulk of the bytes.
+# Verified by execution on 2026-11-08 with a throwaway CARGO_HOME:
+#   debug = 1  -> rustc invocation contains `-C debuginfo=1`
+#   absent     -> rustc invocation contains `-C debuginfo=2`
+#   debug = 0  -> `-C debuginfo` omitted entirely
+#
+# ⛔ IT LIVES IN THE REPO, NOT IN ~/.cargo/config.toml. Cargo gives config.toml
+# precedence OVER this file, so a machine-level value would silently overrule a
+# deliberate per-service choice — and would be invisible in CI and in any fresh
+# clone, so the same commit would build to different debuginfo per machine.
+# A service that genuinely needs full symbols can set `debug = 2` here and get
+# exactly that everywhere.
+#
+# Release is untouched: it already defaults to `debug = 0`, and this template's
+# Dockerfile builds release.
+[profile.dev]
+debug = 1
+
+# ⛔ RUSTSEC-2026-0459 — REMOVE THIS BLOCK when sqlx releases the fix.
+#
+# `sqlx` is declared above with the postgres driver only; this service uses no
+# sqlite. But Cargo still resolves the `sqlx-sqlite` package into Cargo.lock,
+# because sqlx's `migrate` and `json` features reference it weakly
+# (`sqlx-sqlite?/migrate`). Reproduced from first principles on 2026-11-13: a
+# crate whose ONLY dependency is `sqlx = { default-features = false, features =
+# ["runtime-tokio","postgres","migrate"] }` still locks sqlx-sqlite and
+# libsqlite3-sys. Dropping `macros` does not help; neither does regenerating the
+# lock from scratch. `cargo tree -i sqlx-sqlite` prints "nothing to print", i.e.
+# it is never compiled — but `cargo audit` scans the lock, not the build graph.
+#
+# sqlx-sqlite 0.9.0 (the latest release) pins `libsqlite3-sys >=0.30.1, <0.38.0`,
+# and RUSTSEC-2026-0459 is only fixed in libsqlite3-sys >= 0.39.0 — so no
+# published version of the dependency can carry the fix. sqlx main has already
+# widened the bound to `<0.40.0`; patching sqlx-sqlite to that commit lets
+# libsqlite3-sys resolve to the fixed 0.39.x instead of muting the advisory.
+#
+# Trade-off, deliberate: this pins one package to a git rev. sqlx-sqlite is
+# never compiled, so it cannot affect the built binary; the rev is recorded in
+# Cargo.lock, so `--locked` builds stay reproducible.
+#
+# ⚠️ WHEN sqlx publishes a release whose sqlx-sqlite accepts libsqlite3-sys
+# >= 0.39, delete this block, delete the git entry from Cargo.lock
+# (`cargo update -p sqlx-sqlite`), and confirm `cargo audit` still passes.
+[patch.crates-io]
+sqlx-sqlite = { git = "https://github.com/launchbadge/sqlx", rev = "987b8c5a74b6da8b71da6b5549925a7f6e59aac9" }

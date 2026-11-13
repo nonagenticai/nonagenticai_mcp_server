@@ -1,0 +1,5 @@
+# Must equal ARG RUST_TOOLCHAIN in the Dockerfile and rust_toolchain in .github/workflows/ci.yml.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

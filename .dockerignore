@@ -1,0 +1,15 @@
+# Build outputs and other checkouts.
+target/
+.worktrees/
+.git/
+.github/
+# Secrets and local env files never enter the build context.
+.env
+*.env
+# Not part of the build.
+parity/
+parity.toml
+scripts/
+README.md
+Dockerfile
+.dockerignore
