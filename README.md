@@ -1,110 +1,224 @@
 # Executable catalog — MCP server (Rust)
 
-An MCP server for a multi-tenant executable catalog: it stores immutable tool and toolkit
-versions and serves binding-scoped tool discovery and invocation over the [Model Context
-Protocol](https://modelcontextprotocol.io), with a PostgreSQL-backed catalog and a separate
-execution worker.
+[![CI](https://github.com/nonagenticai/nonagenticai_mcp_server/actions/workflows/ci-public.yml/badge.svg)](https://github.com/nonagenticai/nonagenticai_mcp_server/actions/workflows/ci-public.yml)
+[![Release](https://img.shields.io/github/v/release/nonagenticai/nonagenticai_mcp_server)](https://github.com/nonagenticai/nonagenticai_mcp_server/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**This repository is early.** It implements the health surface and the MCP handshake. The
-catalog, credential broker and execution pipeline are being ported in phases against a recorded
-parity contract (see [Parity](#parity)). The Python implementation this replaces is archived at
-[`nonagenticai/nonagenticai_mcp_server-python-archive`](https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive)
-and remains the reference for every behaviour not yet ported.
+An MCP server for a multi-tenant executable catalog. It stores immutable tool and toolkit
+versions, serves binding-scoped tool discovery and invocation over the [Model Context
+Protocol](https://modelcontextprotocol.io), introspects tenant licences, queues runs in
+PostgreSQL, and executes them in isolated Kata pods through a separate worker binary. It is a
+Rust port of the Python implementation archived at
+[`nonagenticai/nonagenticai_mcp_server-python-archive`](https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive).
 
-## What works today
-
-| surface | state |
+| | |
 |---|---|
-| `GET /health`, `/health/live`, `/health/ready`, `/api/health` | implemented, responses match the reference |
-| `POST /mcp` — `initialize` | implemented; negotiates the protocol version |
-| `POST /mcp` — `tools/list` | implemented; returns `[]` (empty catalog) |
-| OpenAPI document (`--print-openapi`) | implemented; needs no configuration and no database |
-| migrations + pool | implemented (`migrations/0001_baseline.sql`, sqlx) |
-| tool catalog, bindings, credentials | **not yet** (phases 2–3) |
-| tool invocation and execution worker | **not yet** (phases 5–6) |
+| **Runtime** | Rust 1.99.0 (pinned in `rust-toolchain.toml`), edition 2024 |
+| **Depends on** | PostgreSQL 18; a Kubernetes cluster with a Kata runtime class only when execution is enabled; a licence introspection endpoint only when licence authentication is configured |
+| **Runs on** | Two binaries from one image: `mcp-server-rs` (API) and `mcp-worker` (executor) |
 
-The `/mcp` endpoint is stateless and SSE-framed, and serialises `capabilities.tools.listChanged`
-as an explicit `false` — both wire details the reference implementation has, and both are
-asserted in `tests/http.rs` against an envelope captured from it.
+## Features
+
+- **MCP over stateless Streamable HTTP** at `/mcp` and `/mcp/`: `initialize`, `tools/list`,
+  `tools/call`, and — when `MCP_TASKS_ENABLED` is set — `tasks/get`, `tasks/update` and
+  `tasks/cancel`.
+- **Catalog-backed `tools/list`.** The caller's live binding is resolved through the same
+  catalog resolver the REST surface uses, paged by `CATALOG_PAGE_SIZE`, with an HMAC-signed,
+  fingerprint-bound cursor. The binding revision is re-read before every page; a stale or
+  forged cursor is refused with `catalog_unavailable_or_invalid_cursor`.
+- **Schema-validated `tools/call`.** Inputs are validated against the tool's declared schema,
+  the resolved tool is re-checked immediately before durable acceptance, and the run is queued
+  in PostgreSQL. Refusals are returned as `isError: true` tool results, never as JSON-RPC
+  errors.
+- **Immutable catalog and toolkit versions** with draft/publish/disable/retire lifecycle,
+  bounded Draft 2020-12 JSON Schema validation, UUIDv7 identities, expected-revision
+  conflicts, and management REST routes under `/mcp/tools`, `/mcp/toolkits`, `/mcp/bindings`,
+  `/mcp/available-tools` and `/mcp/runs`.
+- **Licence and binding authentication** on every `/mcp` request: a tenant licence introspected
+  at `LICENSE_INTROSPECT_URL` plus a binding token (`X-MCP-Binding`), or an operator key
+  (`X-MCP-Admin-Key`) for management routes. Authentication fails closed.
+- **Durable execution.** A PostgreSQL queue with fenced leases, global and per-tenant capacity,
+  idempotency, cancellation, run journal, and recovery/quarantine. The `mcp-worker` binary
+  claims runs, starts one hardened Kata runner pod per run (non-root, read-only root
+  filesystem, all capabilities dropped), brokers every upstream call through a scoped
+  credential broker, and records the outcome.
+- **Health and OpenAPI.** `/health`, `/health/live`, `/health/ready` and `/api/health` report
+  whether execution is enabled; `--print-openapi` emits the OpenAPI document with no
+  configuration and no database.
 
 ## Stack
 
-Rust 1.99.0 (pinned in `rust-toolchain.toml`), edition 2024, axum 0.8, tokio, sqlx 0.9
-(runtime queries only, Postgres, embedded migrations), `rmcp` for the MCP transport, utoipa for
-OpenAPI, tracing for JSON logs.
+Rust 1.99.0, edition 2024, axum 0.8, tokio, sqlx 0.9 (runtime queries only, PostgreSQL,
+embedded migrations), `rmcp` 3.9 for the MCP transport, utoipa for OpenAPI, tracing for JSON
+logs, and `kube` for the worker's pod transport.
 
 ## Layout
 
 | path | what |
 |---|---|
-| `src/lib.rs` | router, OpenAPI document, app state |
-| `src/mcp.rs` | the `/mcp` transport and handler |
-| `src/routes/health.rs` | health endpoints |
-| `src/tenant.rs` | `TenantId` extractor for the trusted `X-Tenant-Id` header |
-| `src/config.rs` | env config: `DATABASE_URL`, `BIND_ADDR` (required), optional `DATABASE_MIGRATE_URL`, `MCP_ALLOWED_HOSTS` |
-| `src/db.rs` | pool + migrator |
-| `migrations/` | `0001_baseline.sql`, the reference schema |
-| `parity.toml`, `parity/` | the parity contract and its runners |
+| `src/main.rs` | the API binary |
+| `src/bin/mcp-worker.rs` | the executor binary |
+| `src/lib.rs` | router, OpenAPI document, application state |
+| `src/mcp.rs` | the `/mcp` transport and handlers (`initialize`, `tools/list`, `tools/call`, tasks) |
+| `src/catalog/` | catalog domain: models, validation, publication, resolver |
+| `src/auth/` | licence introspection, binding authentication, principals, management auth |
+| `src/execution/` | run domain and execution service |
+| `src/worker/` | scheduler, controller, Kata backend, credential broker, egress policy, recovery |
+| `src/routes/` | health and management REST handlers |
+| `src/storage/` | PostgreSQL repositories |
+| `src/config.rs` | environment configuration |
+| `src/db.rs` | pool and embedded migrator |
+| `migrations/` | `0001_baseline.sql` and `0002_catalog_state.sql` |
+| `parity.toml`, `parity/` | the parity contract, fixtures and runners |
 
-## Build, test, run
+## Quick start
 
 ```bash
+git clone https://github.com/nonagenticai/nonagenticai_mcp_server.git
+cd nonagenticai_mcp_server
 cargo build --locked
-cargo test --locked              # DB test: TEST_DATABASE_URL / DATABASE_URL, else an
-                                 # ephemeral docker postgres:18, else it fails (never skips)
-./target/debug/mcp-server-rs --print-openapi   # OpenAPI JSON; no env, no database
 
-DATABASE_URL=postgres://... BIND_ADDR=0.0.0.0:8080 ./target/debug/mcp-server-rs
+export DATABASE_URL=postgres://user:password@127.0.0.1:5432/mcp
+export BIND_ADDR=127.0.0.1:9000
+./target/debug/mcp-server-rs
 ```
 
 Migrations run at startup. If `DATABASE_URL` goes through a transaction-pooling pooler, set
 `DATABASE_MIGRATE_URL` to a direct Postgres URL: sqlx's migrator holds a session-level advisory
 lock that pooled connections cannot guarantee.
 
-## Parity
+The image contains both binaries. Run the worker as a separate process (or Deployment) with the
+same `DATABASE_URL`; execution stays disabled until `EXECUTION_ENABLED=true` and the runner
+images are approved.
 
-`parity.toml` pins the reference implementation and lists, per phase, every operation that is
-not yet ported. The diff is `equal` only when those exclusions apply **and** nothing else
-differs, so the contract can only get stricter: each phase deletes its own group.
+## Usage
+
+Health is unauthenticated:
 
 ```bash
-# reference document (public archive; no env, no database)
-git clone https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive
-(cd nonagenticai_mcp_server-python-archive && uv run --frozen python -c \
-   'import json; from src.asgi import create_app; print(json.dumps(create_app().openapi()))') \
-  > source.openapi.json
-
-./target/debug/mcp-server-rs --print-openapi > target.openapi.json
+curl -sS http://127.0.0.1:9000/health
+# {"execution":"unavailable","status":"alive"}
 ```
 
-`parity/README.md` records the evidence for each gate and the commands that produced it.
+`/mcp` requires a tenant licence and a binding token. A `tools/list` request:
+
+```bash
+curl -sS http://127.0.0.1:9000/mcp \
+  -H 'content-type: application/json' \
+  -H 'X-Tenant-Id: Bearer <tenant licence>' \
+  -H 'X-MCP-Binding: <binding token>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+The response is the binding's catalog page; pass the cursor from one page to fetch the next.
+Off-cluster, the same licence may be sent as `Authorization: Bearer` instead of
+`X-Tenant-Id`.
+
+The OpenAPI document needs no configuration and no database:
+
+```bash
+./target/debug/mcp-server-rs --print-openapi
+```
+
+## Configuration
+
+Nothing has a default port, and the server refuses to start without `DATABASE_URL` and
+`BIND_ADDR`. The full set is documented in `src/config.rs`; worker-only settings use the
+`MCP_WORKER_*`, `MCP_QUEUE_*`, `MCP_RUN_*` and `MCP_EXECUTION_*` prefixes.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATABASE_URL` | required | Runtime connection pool (usually through PgBouncer). |
+| `BIND_ADDR` | required | API listen address, for example `127.0.0.1:9000`. |
+| `DATABASE_MIGRATE_URL` | unset | Direct Postgres URL for migrations; unset means migrate over `DATABASE_URL`. |
+| `EXECUTION_ENABLED` | `false` | Whether this build may run tools. `MCP_EXECUTION_ENABLED` is accepted as an alias; the unprefixed name wins. |
+| `PLATFORM_TENANT_ID` | built-in reserved id | The platform tenant that owns platform toolkits. |
+| `CATALOG_PAGE_SIZE` | `10` | Page bound for `tools/list` and the catalog projection (1–100). |
+| `MCP_APPROVED_RUNNER_IMAGES` | empty | JSON list of approved runner image digests; any other digest is refused. |
+| `MCP_TASKS_ENABLED` | `false` | Serve the `io.modelcontextprotocol/tasks` extension. |
+| `LICENSE_INTROSPECT_URL` | unset | Licence authority introspection endpoint. Unset means every presented credential is rejected (fail closed, 503). |
+| `MCP_LICENSE_APP_KEY` | unset | The application key an introspected licence must name. |
+| `MCP_LICENSE_ALLOW_HTTP` | `false` | Permit an `http://` introspection URL (in-cluster only). |
+| `MCP_LICENSE_TIMEOUT_SECONDS` | `3` | Bound on one introspection call. |
+| `MCP_ADMIN_KEY_FILE` | unset | Mounted operator key file for management authentication. |
+| `MCP_ADMIN_TENANT_IDS` | empty | Tenant ids whose licences may use management authentication. |
+| `MCP_LICENCE_MINTER_ENABLED` | `false` | Mint per-tenant broker credentials from licences. |
+| `MCP_QUEUE_GLOBAL_MAX` | `100` | Queued runs across all tenants. |
+| `MCP_QUEUE_PER_TENANT_MAX` | `20` | Queued runs per tenant. |
+| `MCP_EXECUTION_GLOBAL_SLOTS` | `1` | Runner slots across all tenants. |
+| `MCP_EXECUTION_PER_TENANT_SLOTS` | `1` | Runner slots per tenant. |
+| `MCP_RUN_NAMESPACE` | `mcp-runs` | Namespace the worker creates runner pods in. |
+
+Secrets — the admin key, the credential bundle, the licence-minter client secret and the source
+encryption key — are read from mounted files or dedicated variables, never from this table.
+
+## Development
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo nextest run --locked          # or: cargo test --locked
+cargo test --doc --locked
+cargo audit
+```
+
+There are 24 integration-test files under `tests/`. Database tests select a server from
+`TEST_DATABASE_URL`, else `DATABASE_URL`, else an ephemeral `postgres:18` container started
+with Docker, else they fail — never skip. Each test gets its own fresh database. Runtime
+`DATABASE_URL` is not used by the test harness when `TEST_DATABASE_URL` is set.
+
+## Parity
+
+`parity.toml` pins the Python reference at a public archived commit and defines the contract
+used by the schema and OpenAPI diff gates. The OpenAPI diff is `equal` only when the reviewed
+exclusions in `parity.toml` apply **and** nothing else differs, so the contract can only get
+stricter. The remaining exclusions are the builder/sources/services/operations/credential
+profile surfaces and the `fr` channel; `parity/README.md` records the evidence and the commands
+that produced it.
 
 ## CI
 
 `.github/workflows/ci-public.yml` is self-contained and runs on GitHub-hosted runners: a secret
 scan, a private-reference scan, `cargo fmt` / `clippy -D warnings` / `nextest` + doctests /
-`cargo audit` against a disposable Postgres 18, and a Docker image build (pushed to
-`ghcr.io` from `main` only when the repository variable `PUBLISH_IMAGE` is `true`).
+`cargo audit` against a disposable PostgreSQL 18, and a Docker image build. From `main`, and
+only when the repository variable `PUBLISH_IMAGE` is `true`, the image is pushed to
+`ghcr.io/nonagenticai/mcp-server-rs`.
 
-It does **not** call the private estate archetype, because a public repository cannot read a
-reusable workflow in a private repository — the run dies at startup with zero jobs. The same
-reason rules out self-hosted runners: a fork PR can edit `runs-on`.
+The workflow does not call a private reusable workflow or use self-hosted runners: a public
+repository cannot read a private reusable workflow, and a fork PR can edit `runs-on`, so a
+self-hosted runner would execute untrusted code inside the estate network.
 
 ## Licensing
 
-The code in this repository is Apache-2.0 and needs no licence key to build, test or run.
-It contains no licence-enforcement code today: the executable-catalog port is early and has
-not carried over the licence introspection of the Python implementation it replaces (archived
-at [`nonagenticai/nonagenticai_mcp_server-python-archive`](https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive)).
-The server trusts the `X-Tenant-Id` header the trusted edge injects (see `src/tenant.rs`) and
-never calls a licensing service, so a clone with no licence infrastructure behaves exactly like
-the deployed instance.
+The code in this repository is Apache-2.0 and needs no licence key to build, test or run:
+`--print-openapi`, the health endpoints and the migrations all work with no licence
+infrastructure. Licence **authentication** for `/mcp` is implemented, not enforced
+unconditionally:
+
+- `LICENSE_INTROSPECT_URL` (no default) and `MCP_LICENSE_APP_KEY` (no default) configure the
+  authority call: `POST {"token": ..., "app": ...}` to the licences service. Unset means the
+  built-in `UnconfiguredLicenceAuthority`, which rejects every credential with 503 — the process
+  starts and health works, but protected `/mcp` work stays disabled.
+- `MCP_LICENCE_MINTER_ENABLED` (default `false`) optionally mints per-tenant broker credentials
+  from the same licence authority.
 
 The platform's licence gate is optional and lives in two separate public repositories —
 [`licenses`](https://github.com/nonagenticai/licenses) (entitlements, plans and tokens) and
 [`license-authz`](https://github.com/nonagenticai/license-authz) (the Envoy `ext_authz`
 enforcement point). Nothing in this repository requires either of them.
 
-## Licence
+## Security
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Report vulnerabilities privately through the repository's Security tab — see the
+organisation-wide [`SECURITY.md`](https://github.com/nonagenticai/.github/blob/main/SECURITY.md).
+Do not open a public issue for a security problem.
+
+## Contributing
+
+Issues and pull requests are welcome. See
+[`CONTRIBUTING.md`](https://github.com/nonagenticai/.github/blob/main/CONTRIBUTING.md) for the
+organisation-wide rules; this repository's own commands are in **Development** above.
+
+## License
+
+Apache-2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
