@@ -197,7 +197,11 @@ async fn serve(
         tenant_http,
         settings.builder_oauth_token_max_ttl,
     );
-    let sources = SourceRegistry::new(pool.clone(), settings.source_secret_key.as_deref())?;
+    let sources = SourceRegistry::new(
+        pool.clone(),
+        settings.source_secret_key.as_deref(),
+        settings.source_allowed_hosts.clone(),
+    )?;
 
     let broker = Arc::new(Broker::new(
         pool.clone(),

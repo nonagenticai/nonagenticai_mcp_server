@@ -486,7 +486,12 @@ impl Harness {
             settings.builder_oauth_token_max_ttl,
         );
         let licences: Arc<dyn LicenceAuthority> = Arc::new(Tokens);
-        let sources = SourceRegistry::new(fixture.pool.clone(), None).expect("source registry");
+        // The platform source is plain http on a non-default loopback port: the reference policy
+        // accepts the DNS name `localhost` with an explicit host:port allow-list entry.
+        let live_port = base_url.rsplit(':').next().expect("upstream port");
+        let source_hosts = vec![format!("localhost:{live_port}")];
+        let sources =
+            SourceRegistry::new(fixture.pool.clone(), None, source_hosts).expect("source registry");
         let store = WorkerStore::new(
             fixture.pool.clone(),
             settings.clone(),
@@ -598,7 +603,8 @@ async fn upstream() -> (String, Arc<AtomicUsize>) {
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
-    (format!("http://{address}"), hits)
+    // `localhost` is the DNS name the platform source policy accepts; an IP literal is refused.
+    (format!("http://localhost:{}", address.port()), hits)
 }
 
 /// The platform-owned, unauthenticated source the fixture service names.
@@ -606,10 +612,10 @@ async fn seed_source(pool: &PgPool, base_url: &str) {
     // Platform-owned, so the table's tenant-https check does not apply and the broker calls it
     // through the platform client. `kind: none` sends no credential.
     sqlx::query(
-        "INSERT INTO public.mcp_sources(source_id, owner_tenant_id, source_key, base_url, auth, \
-         created_by, updated_by) \
+        "INSERT INTO public.mcp_sources(source_id, owner_tenant_id, source_key, base_url, \
+         allow_internal_http, auth, created_by, updated_by) \
          VALUES (uuidv7(), '01900000-0000-7000-8000-00000000f001', 'synthetic_destination', \
-         $1, $2, $3, $3)",
+         $1, true, $2, $3, $3)",
     )
     .bind(base_url)
     .bind(json!({"kind": "none"}))

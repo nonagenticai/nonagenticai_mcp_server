@@ -55,6 +55,19 @@ pub struct Kata {
     pods: Api<KubePod>,
 }
 
+/// Whether `image` appears in the operator's approved runner images.
+///
+/// [`WorkerSettings::approved_runner_images`] is parsed as a JSON list, so an entry that still
+/// carries the JSON brackets and quotes — what the old comma-separated parse left for the live
+/// ConfigMap's `["…@sha256:…"]` value — never matches a digest.
+fn approved_runner_image(settings: &WorkerSettings, image: &str) -> bool {
+    settings
+        .approved_runner_images
+        .iter()
+        .map(String::as_str)
+        .any(|approved| approved == image)
+}
+
 impl Kata {
     /// Bind the backend to `run_namespace`.
     ///
@@ -107,13 +120,7 @@ impl Kata {
                 "the run needs a Kata runtime class and a runner image digest",
             ));
         };
-        if image != configured
-            || !settings
-                .approved_runner_images
-                .iter()
-                .map(String::as_str)
-                .any(|approved| approved == image)
-        {
+        if image != configured || !approved_runner_image(settings, image) {
             return Err(BackendError::Denied(
                 "the run's runner image is not the approved digest",
             ));
@@ -625,4 +632,46 @@ fn snapshot_manifest(row: &WorkerRow) -> Result<ToolManifest, BackendError> {
 /// A kube transport failure, with the operation that failed for the log line.
 fn transport(operation: &str, error: kube::Error) -> BackendError {
     BackendError::Transport(format!("{operation}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A representative approved digest: the live value's shape (one digest in a JSON array).
+    /// The host is a placeholder because this repository is public and the live registry is internal.
+    const DIGEST: &str = "registry.example/runner@sha256:f457ca27659ac4fbd7c3b84f817c6bbb3d694bfe3bc27f4c7f0192a9a1128d6d";
+
+    fn parsed_settings(raw: &str) -> WorkerSettings {
+        WorkerSettings::from_lookup(|key| match key {
+            "MCP_RUNNER_IMAGE_DIGEST" => Some(DIGEST.to_owned()),
+            "MCP_APPROVED_RUNNER_IMAGES" => Some(raw.to_owned()),
+            _ => None,
+        })
+        .expect("the worker settings parse")
+    }
+
+    #[test]
+    fn the_approved_image_check_consumes_the_parsed_digest() {
+        // The live ConfigMap's JSON array parses to the plain digest, so the check passes.
+        let settings = parsed_settings(&format!("[\"{DIGEST}\"]"));
+        assert_eq!(settings.runner_image_digest.as_deref(), Some(DIGEST));
+        assert!(approved_runner_image(&settings, DIGEST));
+
+        // A settings value that still carries the brackets and quotes — exactly the element the
+        // old comma-separated parse produced for the same live value — is refused.
+        let mut stale = parsed_settings(&format!("[\"{DIGEST}\"]"));
+        stale.approved_runner_images = vec![format!("[\"{DIGEST}\"]")];
+        assert!(!approved_runner_image(&stale, DIGEST));
+
+        // A comma-separated value is not a JSON list at all, so the settings refuse to load.
+        assert!(
+            WorkerSettings::from_lookup(|key| match key {
+                "MCP_RUNNER_IMAGE_DIGEST" => Some(DIGEST.to_owned()),
+                "MCP_APPROVED_RUNNER_IMAGES" => Some(format!("{DIGEST},")),
+                _ => None,
+            })
+            .is_err()
+        );
+    }
 }

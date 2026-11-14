@@ -195,7 +195,10 @@ jobs:
         if: ${{ vars.PUBLISH_IMAGE == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
         run: |
           set -euo pipefail
-          ref="ghcr.io/${{ github.repository }}"
+          # Not ${{ github.repository }}: this repo's GITHUB_TOKEN cannot push the same-named
+          # package because that package is linked to nonagenticai/nonagenticai_mcp_server-python-archive;
+          # mcp-server-rs is this repo's own package.
+          ref="ghcr.io/nonagenticai/mcp-server-rs"
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           sha="sha-${GITHUB_SHA::7}"
           run="$(printf 'main-%06d' "${{ github.run_number }}")"
