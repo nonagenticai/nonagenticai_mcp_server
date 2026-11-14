@@ -918,7 +918,9 @@ mod tests {
             .iter()
             .map(|problem| (problem.path.as_str(), problem.rule.as_str()))
             .collect();
-        assert_eq!(actual, vec![("/a~1b~0c", "type"), ("/token", "type")]);
+        // The reference iterates the instance/schema in document order (`token`, then `a/b~c`),
+        // which `serde_json`'s `preserve_order` keeps; a BTreeMap would sort these instead.
+        assert_eq!(actual, vec![("/token", "type"), ("/a~1b~0c", "type")]);
         assert!(
             problems
                 .iter()
