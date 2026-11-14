@@ -164,6 +164,7 @@ fn state() -> AppState {
     AppState {
         pool,
         execution_enabled: false,
+        license_app_key: None,
     }
 }
 

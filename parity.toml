@@ -56,7 +56,7 @@ upstreams = []
 paths = [
   "/mcp/available-tools",       # phase 2
   "/mcp/toolkits/import",       # phase 5
-  "/mcp/bindings*",             # phase 2
+  "/mcp/bindings/{identity}/effective-tools",  # phase 2b
   "/mcp/runs*",                 # phase 3
   "/mcp/builder*",              # phase 5
   "/mcp/internal*",             # phase 5 (the tenant-scoped mirrors of builder/sources)

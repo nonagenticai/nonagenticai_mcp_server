@@ -8,8 +8,9 @@ use clap::Parser;
 use tokio::net::TcpListener;
 
 // The crate's own imports stay in their own group so a rename never reorders them.
+use mcp_server_rs::config::{AuthConfig, Config};
 use mcp_server_rs::error::StartupError;
-use mcp_server_rs::{AppState, app, config::Config, db, openapi, telemetry};
+use mcp_server_rs::{AppState, app, db, openapi, telemetry};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -46,6 +47,9 @@ async fn main() -> ExitCode {
 
 async fn serve() -> Result<(), StartupError> {
     let cfg = Config::from_env()?;
+    // Authentication settings are parsed and validated exactly once: the same configuration
+    // builds the `/mcp` middleware and supplies the binding service's gateway application key.
+    let auth_config = AuthConfig::from_env()?;
     let pool = db::connect(&cfg.database_url).await?;
     match &cfg.database_migrate_url {
         Some(url) => {
@@ -61,10 +65,14 @@ async fn serve() -> Result<(), StartupError> {
     tracing::info!(addr = %listener.local_addr()?, "listening");
     axum::serve(
         listener,
-        app(AppState {
-            pool,
-            execution_enabled: cfg.execution_enabled,
-        })?,
+        app(
+            AppState {
+                pool,
+                execution_enabled: cfg.execution_enabled,
+                license_app_key: auth_config.license_app_key.clone(),
+            },
+            &auth_config,
+        )?,
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;

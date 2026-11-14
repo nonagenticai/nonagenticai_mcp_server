@@ -29,6 +29,9 @@ pub struct AppState {
     /// Whether this build can run tools. Reported by the health endpoints; false until the
     /// execution slice lands.
     pub execution_enabled: bool,
+    /// `MCP_LICENSE_APP_KEY`: the gateway application key a binding's credential profile must
+    /// name. Parsed once at startup, from the same [`config::AuthConfig`] the auth layer uses.
+    pub license_app_key: Option<String>,
 }
 
 /// Document-level OpenAPI metadata. `info` (title, version, description) comes from
@@ -38,7 +41,8 @@ pub struct AppState {
     tags(
         (name = "health", description = "Liveness"),
         (name = "tools", description = "Tenant tool catalog"),
-        (name = "toolkits", description = "Tenant toolkits")
+        (name = "toolkits", description = "Tenant toolkits"),
+        (name = "bindings", description = "Tenant bindings")
     ),
     components(schemas(routes::tools::ValidationError))
 )]
@@ -66,6 +70,11 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::toolkits::inspect_toolkit))
         .routes(routes!(routes::toolkits::publish_toolkit))
         .routes(routes!(routes::toolkits::disable_toolkit))
+        .routes(routes!(routes::bindings::create_binding))
+        .routes(routes!(routes::bindings::inspect_binding))
+        .routes(routes!(routes::bindings::update_binding))
+        .routes(routes!(routes::bindings::rotate_binding))
+        .routes(routes!(routes::bindings::revoke_binding))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.
@@ -80,8 +89,13 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// invalid configuration must stop the process rather than serve a `/mcp` surface whose
 /// operator keys or authority are misconfigured (the reference service refuses startup for the
 /// same reasons). The error is returned, never panicked on.
-pub fn app(state: AppState) -> Result<Router, error::StartupError> {
-    let auth = auth::Auth::from_env()?;
+pub fn app(
+    state: AppState,
+    auth_config: &config::AuthConfig,
+) -> Result<Router, error::StartupError> {
+    // One parse of the authentication settings feeds both the middleware and the state's
+    // gateway application key, so the two can never disagree.
+    let auth = auth::Auth::from_config(auth_config)?;
     Ok(app_with_auth(state, auth))
 }
 

@@ -174,6 +174,7 @@ impl Fixture {
             AppState {
                 pool: self.pool.clone(),
                 execution_enabled: false,
+                license_app_key: None,
             },
             auth(),
         )
