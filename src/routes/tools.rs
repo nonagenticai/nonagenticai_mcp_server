@@ -4,7 +4,10 @@
 //! handlers and `CatalogService`; the OpenAPI shapes are the ones the reference's own document
 //! declares, measured from it rather than guessed:
 //!
-//! * every response declares an empty schema (`{}`) — the reference has no response model;
+//! * every response declares an empty schema (`{}`) — the reference has no response model,
+//!   but its handlers DO return JSON at runtime, and so do these: a write answers with the
+//!   reference's `VersionDescriptor`, `definitions` with `{"items", "limit", "offset"}`, an
+//!   inspect with `{"descriptor", "files"}` and validate with its fixed result object;
 //! * exactly five operations declare a request body: create (`ToolUpload`), append
 //!   (`ToolAppend`) and the three status transitions (`RevisionRequest`);
 //! * every operation with a path or query parameter declares the reference's 422
@@ -23,6 +26,7 @@
 
 use std::collections::BTreeMap;
 
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
@@ -30,8 +34,8 @@ use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use utoipa::openapi::schema::{
     AdditionalProperties, AnyOf, Array, Discriminator, Object, OneOf, Schema, SchemaType, Type,
@@ -41,9 +45,9 @@ use utoipa::{IntoParams, Number, PartialSchema, ToSchema};
 
 use crate::AppState;
 use crate::auth::{AuthPrincipal, Principal};
-use crate::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
+use crate::catalog::ids::{AuthorityId, Name, PositiveVersion, Uuid7};
 use crate::catalog::lifecycle::VersionStatus;
-use crate::catalog::models::{Attribution, ToolManifest};
+use crate::catalog::models::{Attribution, ToolManifest, VersionDescriptor};
 use crate::catalog::package::PackageFile;
 use crate::catalog::service::{CatalogService, CatalogServiceError};
 use crate::catalog::validation::SchemaLimits;
@@ -156,6 +160,53 @@ pub struct ValidationError;
 #[derive(Debug)]
 pub struct HTTPValidationError;
 
+// ── success responses ─────────────────────────────────────────────────────────────────────
+//
+// The reference declares no response schema, so the OpenAPI document keeps its empty `{}`
+// shape; the JSON below is what the reference's handlers actually return at runtime. Each
+// struct is declared with the reference's own field order (pydantic's declaration order /
+// the definitions query's column order), because `Json` serializes it field by field.
+
+/// One row of the reference's `GET /mcp/tools/definitions` query.
+#[derive(Debug, Serialize)]
+struct DefinitionsItem<'a> {
+    tool_id: &'a Uuid7,
+    version: PositiveVersion,
+    public_name: &'a Name,
+    revision: PositiveVersion,
+    status: VersionStatus,
+}
+
+/// The reference's definitions envelope: the page plus the window it answered for.
+#[derive(Debug, Serialize)]
+struct DefinitionsPage<'a> {
+    items: Vec<DefinitionsItem<'a>>,
+    limit: u32,
+    offset: u32,
+}
+
+/// The reference's inspect envelope: one exact version and its package files.
+#[derive(Debug, Serialize)]
+struct InspectResponse<'a> {
+    descriptor: &'a VersionDescriptor,
+    files: &'a [PackageFile],
+}
+
+/// The reference's `validate` result: the constants its handler returns after revalidating.
+#[derive(Debug, Serialize)]
+struct ValidationResult<'a> {
+    tool_id: &'a Uuid7,
+    version: PositiveVersion,
+    metadata_valid: bool,
+    credentials_verified: bool,
+    execution: &'static str,
+}
+
+/// A successful lifecycle write: the reference returns the affected `VersionDescriptor`.
+fn descriptor_response(status: StatusCode, descriptor: VersionDescriptor) -> Response {
+    (status, Json(descriptor)).into_response()
+}
+
 // ── handlers ──────────────────────────────────────────────────────────────────────────────
 
 /// Create a tenant tool identity at version 1.
@@ -170,7 +221,7 @@ pub async fn create_tool(
     State(state): State<AppState>,
     principal: AuthPrincipal,
     body: Bytes,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     let principal = require_management(principal)?;
     let payload: ToolUpload = parse_body(&body)?;
     let tenant = tenant_id(&principal);
@@ -180,7 +231,7 @@ pub async fn create_tool(
     if payload.files.is_empty() {
         return Err(ToolError::Invalid);
     }
-    service(&state)
+    let descriptor = service(&state)
         .create_draft(
             &tenant,
             &payload.manifest,
@@ -188,7 +239,7 @@ pub async fn create_tool(
             &actor(&principal),
         )
         .await?;
-    Ok(StatusCode::CREATED)
+    Ok(descriptor_response(StatusCode::CREATED, descriptor))
 }
 
 /// Append the next draft version to an owned tool identity.
@@ -208,7 +259,7 @@ pub async fn append_tool(
     principal: AuthPrincipal,
     Path(identity): Path<String>,
     body: Bytes,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     let principal = require_management(principal)?;
     let identity = Uuid7::new(identity).map_err(|_| ToolError::Invalid)?;
     let payload: ToolAppend = parse_body(&body)?;
@@ -222,7 +273,7 @@ pub async fn append_tool(
     if payload.files.is_empty() {
         return Err(ToolError::Invalid);
     }
-    service(&state)
+    let descriptor = service(&state)
         .append_draft(&AppendRequest {
             tenant_id: &tenant,
             tool_id: &identity,
@@ -233,7 +284,7 @@ pub async fn append_tool(
             exact_version: true,
         })
         .await?;
-    Ok(StatusCode::CREATED)
+    Ok(descriptor_response(StatusCode::CREATED, descriptor))
 }
 
 /// Every tenant version, newest identity first.
@@ -251,7 +302,7 @@ pub async fn definitions(
     State(state): State<AppState>,
     principal: AuthPrincipal,
     query: Result<Query<DefinitionsQuery>, QueryRejection>,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     let principal = require_management(principal)?;
     let Query(query) = query.map_err(|_| ToolError::Invalid)?;
     let limit = query.limit.unwrap_or(50);
@@ -259,10 +310,24 @@ pub async fn definitions(
     if !(1..=100).contains(&limit) {
         return Err(ToolError::Invalid);
     }
-    CatalogRepository::new(state.pool.clone())
+    let definitions = CatalogRepository::new(state.pool.clone())
         .definitions(&tenant_id(&principal), limit, offset)
         .await?;
-    Ok(StatusCode::OK)
+    Ok(Json(DefinitionsPage {
+        items: definitions
+            .iter()
+            .map(|definition| DefinitionsItem {
+                tool_id: &definition.tool_id,
+                version: definition.version,
+                public_name: &definition.public_name,
+                revision: definition.revision,
+                status: definition.status,
+            })
+            .collect(),
+        limit,
+        offset,
+    })
+    .into_response())
 }
 
 /// One exact version and its package files.
@@ -283,15 +348,19 @@ pub async fn inspect(
     State(state): State<AppState>,
     principal: AuthPrincipal,
     Path((identity, version)): Path<(String, String)>,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     let principal = require_management(principal)?;
     let identity = Uuid7::new(identity).map_err(|_| ToolError::Invalid)?;
     let version = version_parameter(&version, true)?;
     let tenant = tenant_id(&principal);
     let repository = CatalogRepository::new(state.pool.clone());
-    repository.get_version(&tenant, &identity, version).await?;
-    repository.files(&tenant, &identity, version).await?;
-    Ok(StatusCode::OK)
+    let descriptor = repository.get_version(&tenant, &identity, version).await?;
+    let files = repository.files(&tenant, &identity, version).await?;
+    Ok(Json(InspectResponse {
+        descriptor: &descriptor,
+        files: &files,
+    })
+    .into_response())
 }
 
 /// Re-run the complete validation over a stored version.
@@ -312,7 +381,7 @@ pub async fn validate(
     State(state): State<AppState>,
     principal: AuthPrincipal,
     Path((identity, version)): Path<(String, String)>,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     let principal = require_management(principal)?;
     let identity = Uuid7::new(identity).map_err(|_| ToolError::Invalid)?;
     let version = version_parameter(&version, false)?;
@@ -321,7 +390,14 @@ pub async fn validate(
     let original = repository.get_version(&tenant, &identity, version).await?;
     let files = repository.files(&tenant, &identity, version).await?;
     service(&state).validate(&original.manifest, &files).await?;
-    Ok(StatusCode::OK)
+    Ok(Json(ValidationResult {
+        tool_id: &identity,
+        version,
+        metadata_valid: true,
+        credentials_verified: false,
+        execution: "unavailable",
+    })
+    .into_response())
 }
 
 /// Publish a draft version.
@@ -344,7 +420,7 @@ pub async fn publish_tool(
     principal: AuthPrincipal,
     Path((identity, version)): Path<(String, String)>,
     body: Bytes,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     transition(
         state,
         principal,
@@ -376,7 +452,7 @@ pub async fn disable_tool(
     principal: AuthPrincipal,
     Path((identity, version)): Path<(String, String)>,
     body: Bytes,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     transition(
         state,
         principal,
@@ -408,7 +484,7 @@ pub async fn retire_tool(
     principal: AuthPrincipal,
     Path((identity, version)): Path<(String, String)>,
     body: Bytes,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     transition(
         state,
         principal,
@@ -429,12 +505,12 @@ async fn transition(
     version: String,
     body: Bytes,
     status: VersionStatus,
-) -> Result<StatusCode, ToolError> {
+) -> Result<Response, ToolError> {
     let principal = require_management(principal)?;
     let identity = Uuid7::new(identity).map_err(|_| ToolError::Invalid)?;
     let version = version_parameter(&version, false)?;
     let payload: RevisionRequest = parse_body(&body)?;
-    service(&state)
+    let descriptor = service(&state)
         .transition(
             &tenant_id(&principal),
             &identity,
@@ -444,7 +520,7 @@ async fn transition(
             payload.expected_revision,
         )
         .await?;
-    Ok(StatusCode::OK)
+    Ok(descriptor_response(StatusCode::OK, descriptor))
 }
 
 /// The middleware only ever raises a management principal on a management path; a handler

@@ -1,7 +1,8 @@
 //! The eight `/mcp/tools` operations against the real router and a real Postgres 18. Each test
-//! fails if the behaviour it covers is removed: a create persists, a binding credential cannot
-//! reach a management route, every refusal renders the reference's `{"error": …}` with
-//! `Cache-Control: no-store`, and every route is wired to its handler.
+//! fails if the behaviour it covers is removed: every success asserts the reference's response
+//! BODY (its `VersionDescriptor` / definitions page / inspect envelope / validation result),
+//! a binding credential cannot reach a management route, every refusal renders the reference's
+//! `{"error": …}` with `Cache-Control: no-store`, and every route is wired to its handler.
 //!
 //! Server selection mirrors `tests/db.rs`: `TEST_DATABASE_URL`, else `DATABASE_URL` (a URL whose
 //! user may CREATE DATABASE), else an ephemeral `postgres:18` container started here with docker
@@ -344,18 +345,78 @@ fn append(tenant: &str, version: u32, expected_revision: u32) -> Value {
     })
 }
 
+/// The manifest as the reference echoes it: the submitted fields plus every model default.
+fn echoed_manifest(tenant: &str, version: u32) -> Value {
+    json!({
+        "schema_version": 1,
+        "tool_id": TOOL,
+        "tenant_id": tenant,
+        "version": version,
+        "public_name": "synthetic_tool",
+        "operation": "synthetic.synthetic_tool",
+        "description": "Synthetic fixture",
+        "runtime": "n8n_workflow",
+        "target": {"kind": "n8n_workflow", "webhook_path": "synthetic/hook", "result_node": "MCP Result"},
+        "entrypoint": null,
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "result_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "context_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "package_sha256": "a".repeat(64),
+        "runner_image_digest": null,
+        "allowed_operations": [],
+        "operation_constraints": [],
+        "limits": {
+            "wall_seconds": 60,
+            "queue_seconds": 60,
+            "memory_mi": 256,
+            "cpu_millicores": 250,
+            "api_calls": 10,
+            "frame_bytes": 65536,
+            "output_bytes": 262144
+        },
+        "effect": "read_only",
+    })
+}
+
+/// The reference's `VersionDescriptor`, exactly as `catalog.py` returns it.
+fn descriptor(tenant: &str, version: u32, revision: u32, status: &str) -> Value {
+    json!({
+        "tenant_id": tenant,
+        "tool_id": TOOL,
+        "version": version,
+        "revision": revision,
+        "status": status,
+        "manifest": echoed_manifest(tenant, version),
+        "created_by": {"subject": "svc:test:mcp", "license_id": LICENCE_ID},
+        "source": null,
+    })
+}
+
+/// One row of the reference's definitions query, as its raw DB row serializes.
+fn definition(version: u32, revision: u32, status: &str) -> Value {
+    json!({
+        "tool_id": TOOL,
+        "version": version,
+        "public_name": "synthetic_tool",
+        "revision": revision,
+        "status": status,
+    })
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn create_persists_the_draft() {
+async fn create_returns_the_first_version_descriptor() {
     let fixture = Fixture::new().await;
-    let app = fixture.app();
-    let (status, _, _) = send(
-        &app,
+    let (status, headers, body) = send(
+        &fixture.app(),
         management(Method::POST, "/mcp/tools", Some(upload(TENANT_A, 1))),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
+    assert_no_store(&headers);
+    // Every field of the reference's VersionDescriptor, no extras and no omissions.
+    assert_eq!(body, descriptor(TENANT_A, 1, 1, "draft"));
 
     let tools: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM public.mcp_tools WHERE tenant_id = $1::uuid AND tool_id = $2::uuid",
@@ -366,17 +427,236 @@ async fn create_persists_the_draft() {
     .await
     .expect("read identity");
     assert_eq!(tools, 1);
+    fixture.finish().await;
+}
 
-    let versions: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM public.mcp_tool_versions \
-         WHERE tenant_id = $1::uuid AND tool_id = $2::uuid AND version = 1 AND status = 'draft'",
+#[tokio::test]
+async fn append_returns_the_next_version_descriptor() {
+    let fixture = Fixture::new().await;
+    let app = fixture.app();
+    let (status, _, _) = send(
+        &app,
+        management(Method::POST, "/mcp/tools", Some(upload(TENANT_A, 1))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, headers, body) = send(
+        &app,
+        management(
+            Method::POST,
+            &format!("/mcp/tools/{TOOL}/versions"),
+            Some(append(TENANT_A, 2, 1)),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_no_store(&headers);
+    // Version 2 of the same identity, and the identity's revision is bumped to 2.
+    assert_eq!(body, descriptor(TENANT_A, 2, 2, "draft"));
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn definitions_returns_the_items_and_the_window() {
+    let fixture = Fixture::new().await;
+    let app = fixture.app();
+    let (status, _, _) = send(
+        &app,
+        management(Method::POST, "/mcp/tools", Some(upload(TENANT_A, 1))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = send(
+        &app,
+        management(
+            Method::POST,
+            &format!("/mcp/tools/{TOOL}/versions"),
+            Some(append(TENANT_A, 2, 1)),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, headers, body) = send(
+        &app,
+        management(
+            Method::GET,
+            "/mcp/tools/definitions?limit=10&offset=0",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_no_store(&headers);
+    // Both versions carry the identity's current revision (2), as the reference's join does.
+    assert_eq!(
+        body,
+        json!({
+            "items": [definition(1, 2, "draft"), definition(2, 2, "draft")],
+            "limit": 10,
+            "offset": 0,
+        })
+    );
+
+    // The window is honoured, not just echoed: offset 1 with limit 1 skips version 1.
+    let (status, _, body) = send(
+        &app,
+        management(Method::GET, "/mcp/tools/definitions?limit=1&offset=1", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "items": [definition(2, 2, "draft")],
+            "limit": 1,
+            "offset": 1,
+        })
+    );
+
+    // The reference's defaults: limit 50, offset 0.
+    let (status, _, body) = send(
+        &app,
+        management(Method::GET, "/mcp/tools/definitions", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "items": [definition(1, 2, "draft"), definition(2, 2, "draft")],
+            "limit": 50,
+            "offset": 0,
+        })
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn inspect_returns_the_descriptor_and_the_files() {
+    let fixture = Fixture::new().await;
+    let app = fixture.app();
+    let create = json!({
+        "manifest": manifest(TENANT_A, 1),
+        "files": [
+            {"path": "package/main.py", "content": "print('synthetic')\n"},
+            {"path": "package/helper.py", "content": "VALUE = 1\n"},
+        ],
+    });
+    let (status, _, created_body) =
+        send(&app, management(Method::POST, "/mcp/tools", Some(create))).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, headers, body) = send(
+        &app,
+        management(Method::GET, &format!("/mcp/tools/{TOOL}/versions/1"), None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_no_store(&headers);
+    // The descriptor of the inspected version, byte-for-byte what create returned, and every
+    // package file with its exact content, ordered by path as the reference's query does.
+    assert_eq!(body["descriptor"], created_body);
+    assert_eq!(
+        body["files"],
+        json!([
+            {"path": "package/helper.py", "content": "VALUE = 1\n"},
+            {"path": "package/main.py", "content": "print('synthetic')\n"},
+        ])
+    );
+    assert_eq!(
+        body.as_object()
+            .expect("inspect envelope")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["descriptor", "files"],
+        "inspect answers exactly the reference's two keys"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn validate_returns_the_reference_result() {
+    let fixture = Fixture::new().await;
+    let app = fixture.app();
+    let (status, _, _) = send(
+        &app,
+        management(Method::POST, "/mcp/tools", Some(upload(TENANT_A, 1))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, headers, body) = send(
+        &app,
+        management(
+            Method::POST,
+            &format!("/mcp/tools/{TOOL}/versions/1/validate"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_no_store(&headers);
+    assert_eq!(
+        body,
+        json!({
+            "tool_id": TOOL,
+            "version": 1,
+            "metadata_valid": true,
+            "credentials_verified": false,
+            "execution": "unavailable",
+        })
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn transitions_return_the_descriptor_with_the_new_status() {
+    let fixture = Fixture::new().await;
+    let app = fixture.app();
+    let (status, _, _) = send(
+        &app,
+        management(Method::POST, "/mcp/tools", Some(upload(TENANT_A, 1))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // draft (revision 1) → published (2) → disabled (3) → retired (4).
+    for (action, expected_revision, status_text, revision) in [
+        ("publish", 1, "published", 2),
+        ("disable", 2, "disabled", 3),
+        ("retire", 3, "retired", 4),
+    ] {
+        let (status, headers, body) = send(
+            &app,
+            management(
+                Method::POST,
+                &format!("/mcp/tools/{TOOL}/versions/1/{action}"),
+                Some(json!({"expected_revision": expected_revision})),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{action}");
+        assert_no_store(&headers);
+        assert_eq!(
+            body,
+            descriptor(TENANT_A, 1, revision, status_text),
+            "{action} must answer the affected version's descriptor"
+        );
+    }
+
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM public.mcp_tool_versions \
+         WHERE tenant_id = $1::uuid AND tool_id = $2::uuid AND version = 1",
     )
     .bind(TENANT_A)
     .bind(TOOL)
     .fetch_one(&fixture.pool)
     .await
-    .expect("read version");
-    assert_eq!(versions, 1);
+    .expect("read status");
+    assert_eq!(status, "retired");
     fixture.finish().await;
 }
 
@@ -477,86 +757,6 @@ async fn refusals_carry_the_reference_codes_and_no_store() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body, json!({"error": "invalid_request"}));
-    fixture.finish().await;
-}
-
-#[tokio::test]
-async fn every_tool_route_is_wired() {
-    let fixture = Fixture::new().await;
-    let app = fixture.app();
-
-    let (status, _, _) = send(
-        &app,
-        management(Method::POST, "/mcp/tools", Some(upload(TENANT_A, 1))),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-
-    let (status, _, _) = send(
-        &app,
-        management(
-            Method::GET,
-            "/mcp/tools/definitions?limit=10&offset=0",
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-
-    // append v2 while the identity is at revision 1
-    let (status, _, _) = send(
-        &app,
-        management(
-            Method::POST,
-            &format!("/mcp/tools/{TOOL}/versions"),
-            Some(append(TENANT_A, 2, 1)),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-
-    let (status, _, _) = send(
-        &app,
-        management(Method::GET, &format!("/mcp/tools/{TOOL}/versions/2"), None),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-
-    let (status, _, _) = send(
-        &app,
-        management(
-            Method::POST,
-            &format!("/mcp/tools/{TOOL}/versions/1/validate"),
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-
-    // Each transition bumps the identity revision: 2 (append) → 3 → 4 → 5.
-    for (action, expected_revision) in [("publish", 2), ("disable", 3), ("retire", 4)] {
-        let (status, _, _) = send(
-            &app,
-            management(
-                Method::POST,
-                &format!("/mcp/tools/{TOOL}/versions/1/{action}"),
-                Some(json!({"expected_revision": expected_revision})),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{action}");
-    }
-
-    let status: String = sqlx::query_scalar(
-        "SELECT status FROM public.mcp_tool_versions \
-         WHERE tenant_id = $1::uuid AND tool_id = $2::uuid AND version = 1",
-    )
-    .bind(TENANT_A)
-    .bind(TOOL)
-    .fetch_one(&fixture.pool)
-    .await
-    .expect("read status");
-    assert_eq!(status, "retired");
     fixture.finish().await;
 }
 
