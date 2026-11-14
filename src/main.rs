@@ -64,7 +64,7 @@ async fn serve() -> Result<(), StartupError> {
         app(AppState {
             pool,
             execution_enabled: cfg.execution_enabled,
-        }),
+        })?,
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
