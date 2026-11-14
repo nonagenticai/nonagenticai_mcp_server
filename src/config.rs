@@ -5,6 +5,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE;
+
 use crate::auth::uuid::Rfc4122Uuid;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -63,11 +66,7 @@ impl Config {
         // `EXECUTION_ENABLED` is this service's switch. The live deployment ConfigMap still sets
         // the reference's prefixed `MCP_EXECUTION_ENABLED`, so the prefixed name is accepted as
         // an alias during the drop-in cutover; the unprefixed name wins when both are set.
-        let execution_enabled = match (get("EXECUTION_ENABLED"), get("MCP_EXECUTION_ENABLED")) {
-            (Some(value), _) => bool_value("EXECUTION_ENABLED", &value)?,
-            (None, Some(value)) => bool_value("MCP_EXECUTION_ENABLED", &value)?,
-            (None, None) => false,
-        };
+        let execution_enabled = execution_enabled_setting(&get)?;
         let platform_tenant_id = match get("PLATFORM_TENANT_ID") {
             None => default_platform_tenant_id(),
             Some(v) => Rfc4122Uuid::parse(v.trim()).ok_or_else(|| ConfigError::Invalid {
@@ -309,6 +308,439 @@ impl ExecutionSettings {
     }
 }
 
+/// The worker process's settings from the reference `Settings` (`src/config.py`), minus the
+/// queue, timeout and retention bounds [`ExecutionSettings`] already carries.
+///
+/// Env names are the reference's (`MCP_` prefix), and so are the defaults. The reference
+/// validates its cross-setting rules at startup; [`WorkerSettings::validate`] mirrors them and
+/// adds the worker-start rule that a process needs an explicit credential source
+/// (`src/execution/worker.py:run`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerSettings {
+    /// `MCP_WORKER_PROBE_PORT` (1024 to 65535, default 8034): the worker's health probe port.
+    pub probe_port: u16,
+    /// `MCP_WORKER_MAX_INFLIGHT` (1 to 128, default 8): runs or local controller tasks one
+    /// worker process drives at once.
+    pub max_inflight: u32,
+    /// `MCP_EXECUTION_GLOBAL_SLOTS` (1 to 128, default 1): runner slots across all tenants.
+    pub global_slots: u32,
+    /// `MCP_EXECUTION_PER_TENANT_SLOTS` (1 to 32, at most the global slots, default 1): runner
+    /// slots one tenant may hold.
+    pub per_tenant_slots: u32,
+    /// `MCP_RUN_START_TIMEOUT_SECONDS` (1 to 120, default 30): bound on starting one run.
+    pub run_start_timeout: Duration,
+    /// `MCP_RUN_MAX_SECONDS` (1 to 300, default 60): bound on one Kata run's lifetime.
+    pub run_max: Duration,
+    /// `MCP_LEASE_SECONDS` (10 to 300, default 30): how long a claimed run's lease holds.
+    pub lease: Duration,
+    /// `MCP_HEARTBEAT_SECONDS` (1 to 60, default 5): lease renewal interval; three intervals
+    /// must fit inside one lease.
+    pub heartbeat: Duration,
+    /// `MCP_RECONCILE_SECONDS` (1 to 60, default 10): how often orphaned runs are reconciled.
+    pub reconcile: Duration,
+    /// `MCP_API_MAX_INFLIGHT` (1 to 100, default 8): upstream API calls in flight per run.
+    pub api_max_inflight: u32,
+    /// `MCP_API_CONCURRENCY_GLOBAL` (1 to 100, default 8): upstream API calls in flight across
+    /// the worker.
+    pub api_concurrency_global: u32,
+    /// `MCP_API_CONCURRENCY_PER_SERVICE` (1 to 100, default 8): upstream API calls in flight to
+    /// one service.
+    pub api_concurrency_per_service: u32,
+    /// `MCP_API_MAX_CALLS_PER_MINUTE` (1 to 10000, default 60): upstream call rate bound.
+    pub api_max_calls_per_minute: u32,
+    /// `MCP_MAX_API_CALLS_PER_RUN` (0 to 100, default 10): the worker-wide ceiling on upstream
+    /// calls one run may journal, narrowed by the authority's own limit.
+    pub max_api_calls_per_run: u32,
+    /// `MCP_API_TIMEOUT_SECONDS` (1 to 300, default 30): bound on one upstream API call.
+    pub api_timeout: Duration,
+    /// `MCP_API_MAX_RESPONSE_BYTES` (1 to 10485760, default 262144): bound on one upstream
+    /// response body.
+    pub api_max_response_bytes: usize,
+    /// `MCP_MAX_FRAME_BYTES` (1 to 1048576, default 65536): bound on one runner-protocol frame;
+    /// never larger than [`Self::max_output_bytes`].
+    pub max_frame_bytes: usize,
+    /// `MCP_MAX_OUTPUT_BYTES` (1 to 4194304, default 1048576): bound on a run's captured output.
+    pub max_output_bytes: usize,
+    /// `MCP_MAX_LOG_BYTES` (1 to 65536, default 8192): bound on a run's captured logs.
+    pub max_log_bytes: usize,
+    /// `MCP_MAX_FRAMES` (1 to 1000, default 256): bound on the frames one run may exchange.
+    pub max_frames: u32,
+    /// `MCP_RUN_NAMESPACE` (default `mcp-runs`): the dedicated namespace runner pods live in;
+    /// any other value is refused.
+    pub run_namespace: String,
+    /// `MCP_KATA_RUNTIME_CLASS` (optional): the RuntimeClass runner pods request. Required when
+    /// execution is enabled.
+    pub kata_runtime_class: Option<String>,
+    /// `MCP_RUNNER_IMAGE_DIGEST` (optional): the runner image a run may use. Required when
+    /// execution is enabled.
+    pub runner_image_digest: Option<String>,
+    /// `MCP_APPROVED_RUNNER_IMAGES` (optional, comma-separated, default empty): the runner image
+    /// digests a `kata_python` tool may name. Must be non-empty when execution is enabled.
+    pub approved_runner_images: Vec<String>,
+    /// `MCP_RUN_MEMORY_REQUEST_MI` (32 to 1024, default 256): runner memory request, MiB.
+    pub run_memory_request_mi: u32,
+    /// `MCP_RUN_MEMORY_LIMIT_MI` (32 to 1024, default 256): runner memory limit, MiB.
+    pub run_memory_limit_mi: u32,
+    /// `MCP_RUN_CPU_REQUEST` (10 to 1000, default 250): runner CPU request, millicores.
+    pub run_cpu_request: u32,
+    /// `MCP_RUN_CPU_LIMIT` (10 to 1000, default 250): runner CPU limit, millicores.
+    pub run_cpu_limit: u32,
+    /// `MCP_CREDENTIAL_BUNDLE_FILE` (optional): the mounted per-tenant credential bundle.
+    pub credential_bundle_file: Option<PathBuf>,
+    /// The `MCP_LICENCE_MINTER_*` settings for licence-minted credentials.
+    pub licence_minter: MinterSettings,
+    /// `MCP_SOURCE_SECRET_KEY` (optional): the AES-256-GCM key for stored source tokens, 32
+    /// bytes as padded or unpadded base64url.
+    pub source_secret_key: Option<String>,
+    /// `MCP_BUILDER_OAUTH_TOKEN_MAX_TTL` (30 to 86400 seconds, default 3600): the longest an
+    /// OAuth token the tool builder obtains may be reused.
+    pub builder_oauth_token_max_ttl: Duration,
+    /// `MCP_BUILDER_SOURCE_CALLS_PER_MINUTE` (1 to 100000, default 60): the builder's upstream
+    /// call rate bound.
+    pub builder_source_calls_per_minute: u32,
+    /// `MCP_BUILDER_SOURCE_CONCURRENCY` (1 to 100, default 2): the builder's upstream calls in
+    /// flight.
+    pub builder_source_concurrency: u32,
+    /// `MCP_BUILDER_SERVICE_LIMITS_FILE` (optional): the per-service builder rate-limit table.
+    pub service_limits_file: Option<PathBuf>,
+}
+
+impl Default for WorkerSettings {
+    fn default() -> Self {
+        Self {
+            probe_port: 8_034,
+            max_inflight: 8,
+            global_slots: 1,
+            per_tenant_slots: 1,
+            run_start_timeout: Duration::from_secs(30),
+            run_max: Duration::from_secs(60),
+            lease: Duration::from_secs(30),
+            heartbeat: Duration::from_secs(5),
+            reconcile: Duration::from_secs(10),
+            api_max_inflight: 8,
+            api_concurrency_global: 8,
+            api_concurrency_per_service: 8,
+            api_max_calls_per_minute: 60,
+            max_api_calls_per_run: 10,
+            api_timeout: Duration::from_secs(30),
+            api_max_response_bytes: 262_144,
+            max_frame_bytes: 65_536,
+            max_output_bytes: 1_048_576,
+            max_log_bytes: 8_192,
+            max_frames: 256,
+            run_namespace: "mcp-runs".to_owned(),
+            kata_runtime_class: None,
+            runner_image_digest: None,
+            approved_runner_images: Vec::new(),
+            run_memory_request_mi: 256,
+            run_memory_limit_mi: 256,
+            run_cpu_request: 250,
+            run_cpu_limit: 250,
+            credential_bundle_file: None,
+            licence_minter: MinterSettings::default(),
+            source_secret_key: None,
+            builder_oauth_token_max_ttl: Duration::from_secs(3_600),
+            builder_source_calls_per_minute: 60,
+            builder_source_concurrency: 2,
+            service_limits_file: None,
+        }
+    }
+}
+
+impl WorkerSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`WorkerSettings::from_env`]. Empty values count as unset. The
+    /// execution switch is resolved from the same environment, so a plain `from_env` cannot
+    /// miss the prerequisites of an enabled worker.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let execution_enabled = execution_enabled_setting(&get)?;
+        let settings = Self {
+            probe_port: u16_setting(&get, "MCP_WORKER_PROBE_PORT", 8_034, 1_024, 65_535)?,
+            max_inflight: u32_setting(&get, "MCP_WORKER_MAX_INFLIGHT", 8, 1, 128)?,
+            global_slots: u32_setting(&get, "MCP_EXECUTION_GLOBAL_SLOTS", 1, 1, 128)?,
+            per_tenant_slots: positive_u32_setting(&get, "MCP_EXECUTION_PER_TENANT_SLOTS", 1)?,
+            run_start_timeout: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_RUN_START_TIMEOUT_SECONDS",
+                30,
+                1,
+                120,
+            )?),
+            run_max: Duration::from_secs(u64_setting(&get, "MCP_RUN_MAX_SECONDS", 60, 1, 300)?),
+            lease: Duration::from_secs(u64_setting(&get, "MCP_LEASE_SECONDS", 30, 10, 300)?),
+            heartbeat: Duration::from_secs(u64::from(positive_u32_setting(
+                &get,
+                "MCP_HEARTBEAT_SECONDS",
+                5,
+            )?)),
+            reconcile: Duration::from_secs(u64_setting(&get, "MCP_RECONCILE_SECONDS", 10, 1, 60)?),
+            api_max_inflight: u32_setting(&get, "MCP_API_MAX_INFLIGHT", 8, 1, 100)?,
+            api_concurrency_global: u32_setting(&get, "MCP_API_CONCURRENCY_GLOBAL", 8, 1, 100)?,
+            api_concurrency_per_service: u32_setting(
+                &get,
+                "MCP_API_CONCURRENCY_PER_SERVICE",
+                8,
+                1,
+                100,
+            )?,
+            api_max_calls_per_minute: u32_setting(
+                &get,
+                "MCP_API_MAX_CALLS_PER_MINUTE",
+                60,
+                1,
+                10_000,
+            )?,
+            max_api_calls_per_run: u32_setting(&get, "MCP_MAX_API_CALLS_PER_RUN", 10, 0, 100)?,
+            api_timeout: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_API_TIMEOUT_SECONDS",
+                30,
+                1,
+                300,
+            )?),
+            api_max_response_bytes: int_setting(
+                &get,
+                "MCP_API_MAX_RESPONSE_BYTES",
+                262_144,
+                1,
+                10_485_760,
+            )?,
+            max_frame_bytes: int_setting(&get, "MCP_MAX_FRAME_BYTES", 65_536, 1, 1_048_576)?,
+            max_output_bytes: int_setting(&get, "MCP_MAX_OUTPUT_BYTES", 1_048_576, 1, 4_194_304)?,
+            max_log_bytes: int_setting(&get, "MCP_MAX_LOG_BYTES", 8_192, 1, 65_536)?,
+            max_frames: u32_setting(&get, "MCP_MAX_FRAMES", 256, 1, 1_000)?,
+            run_namespace: get("MCP_RUN_NAMESPACE").unwrap_or_else(|| "mcp-runs".to_owned()),
+            kata_runtime_class: get("MCP_KATA_RUNTIME_CLASS"),
+            runner_image_digest: get("MCP_RUNNER_IMAGE_DIGEST"),
+            approved_runner_images: comma_list(get("MCP_APPROVED_RUNNER_IMAGES")),
+            run_memory_request_mi: u32_setting(&get, "MCP_RUN_MEMORY_REQUEST_MI", 256, 32, 1_024)?,
+            run_memory_limit_mi: u32_setting(&get, "MCP_RUN_MEMORY_LIMIT_MI", 256, 32, 1_024)?,
+            run_cpu_request: u32_setting(&get, "MCP_RUN_CPU_REQUEST", 250, 10, 1_000)?,
+            run_cpu_limit: u32_setting(&get, "MCP_RUN_CPU_LIMIT", 250, 10, 1_000)?,
+            credential_bundle_file: get("MCP_CREDENTIAL_BUNDLE_FILE").map(PathBuf::from),
+            licence_minter: MinterSettings::from_lookup(|key| get(key))?,
+            source_secret_key: get("MCP_SOURCE_SECRET_KEY"),
+            builder_oauth_token_max_ttl: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_BUILDER_OAUTH_TOKEN_MAX_TTL",
+                3_600,
+                30,
+                86_400,
+            )?),
+            builder_source_calls_per_minute: u32_setting(
+                &get,
+                "MCP_BUILDER_SOURCE_CALLS_PER_MINUTE",
+                60,
+                1,
+                100_000,
+            )?,
+            builder_source_concurrency: u32_setting(
+                &get,
+                "MCP_BUILDER_SOURCE_CONCURRENCY",
+                2,
+                1,
+                100,
+            )?,
+            service_limits_file: get("MCP_BUILDER_SERVICE_LIMITS_FILE").map(PathBuf::from),
+        };
+        if let Some(value) = &settings.source_secret_key {
+            decode_source_secret_key(value)?;
+        }
+        settings.validate(execution_enabled)?;
+        Ok(settings)
+    }
+
+    /// The reference's startup cross-checks (`src/config.py:316-333`), plus the worker-start
+    /// rule from `src/execution/worker.py:run`. `execution_enabled` is the resolved
+    /// `EXECUTION_ENABLED`/`MCP_EXECUTION_ENABLED` switch.
+    pub fn validate(&self, execution_enabled: bool) -> Result<(), ConfigError> {
+        if self.heartbeat.saturating_mul(3) >= self.lease {
+            return Err(ConfigError::Invalid {
+                name: "MCP_HEARTBEAT_SECONDS",
+                reason: "lease must be longer than three heartbeat intervals".into(),
+            });
+        }
+        if self.per_tenant_slots > 32 {
+            return Err(ConfigError::Invalid {
+                name: "MCP_EXECUTION_PER_TENANT_SLOTS",
+                reason: "per-tenant slots exceed 32".into(),
+            });
+        }
+        if self.per_tenant_slots > self.global_slots {
+            return Err(ConfigError::Invalid {
+                name: "MCP_EXECUTION_PER_TENANT_SLOTS",
+                reason: "per-tenant slots exceed the global slots".into(),
+            });
+        }
+        if self.heartbeat > Duration::from_secs(60) {
+            return Err(ConfigError::Invalid {
+                name: "MCP_HEARTBEAT_SECONDS",
+                reason: "heartbeat exceeds 60 seconds".into(),
+            });
+        }
+        if self.max_frame_bytes > self.max_output_bytes {
+            return Err(ConfigError::Invalid {
+                name: "MCP_MAX_FRAME_BYTES",
+                reason: "frame limit exceeds the aggregate output limit".into(),
+            });
+        }
+        if self.run_memory_request_mi > self.run_memory_limit_mi {
+            return Err(ConfigError::Invalid {
+                name: "MCP_RUN_MEMORY_REQUEST_MI",
+                reason: "runner requests exceed limits".into(),
+            });
+        }
+        if self.run_cpu_request > self.run_cpu_limit {
+            return Err(ConfigError::Invalid {
+                name: "MCP_RUN_CPU_REQUEST",
+                reason: "runner requests exceed limits".into(),
+            });
+        }
+        if self.run_namespace != "mcp-runs" {
+            return Err(ConfigError::Invalid {
+                name: "MCP_RUN_NAMESPACE",
+                reason: "execution requires the dedicated mcp-runs namespace".into(),
+            });
+        }
+        if execution_enabled && self.approved_runner_images.is_empty() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_APPROVED_RUNNER_IMAGES",
+                reason: "execution requires approved runner images".into(),
+            });
+        }
+        if execution_enabled && self.kata_runtime_class.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_KATA_RUNTIME_CLASS",
+                reason: "execution requires a Kata runtime class".into(),
+            });
+        }
+        if execution_enabled && self.runner_image_digest.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_RUNNER_IMAGE_DIGEST",
+                reason: "execution requires a runner image digest".into(),
+            });
+        }
+        self.licence_minter.validate()?;
+        if execution_enabled
+            && self.credential_bundle_file.is_none()
+            && !self.licence_minter.enabled
+        {
+            return Err(ConfigError::Invalid {
+                name: "MCP_CREDENTIAL_BUNDLE_FILE",
+                reason: "a worker requires a credential bundle file or the licence minter".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Licence-minted per-tenant broker credentials, the reference's `licence_minter_*` settings
+/// (`src/credentials/minter.py`).
+///
+/// Off by default: the mounted [`WorkerSettings::credential_bundle_file`] is the credential
+/// source until an operator enables minting. Env names carry the reference's `MCP_` prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinterSettings {
+    /// `MCP_LICENCE_MINTER_ENABLED` (default false): mint credentials per tenant from licences.
+    pub enabled: bool,
+    /// `MCP_LICENCE_MINTER_URL` (required when enabled): the licences service base URL.
+    pub url: Option<String>,
+    /// `MCP_LICENCE_MINTER_TOKEN_URL` (required when enabled): the client-credentials token URL.
+    pub token_url: Option<String>,
+    /// `MCP_LICENCE_MINTER_CLIENT_ID` (default `mcp-bundle-minter`): the Keycloak client the
+    /// minter authenticates as.
+    pub client_id: String,
+    /// `MCP_LICENCE_MINTER_SECRET_FILE` (required when enabled): the mounted client secret.
+    pub secret_file: Option<PathBuf>,
+    /// `MCP_LICENCE_MINTER_TTL_MINUTES` (1 to 60, default 15): the lifetime requested for a
+    /// minted credential.
+    pub ttl: Duration,
+    /// `MCP_LICENCE_MINTER_SKEW_SECONDS` (0 to 300, default 30): renew a credential this early.
+    pub skew: Duration,
+}
+
+impl Default for MinterSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: None,
+            token_url: None,
+            client_id: "mcp-bundle-minter".to_owned(),
+            secret_file: None,
+            ttl: Duration::from_secs(15 * 60),
+            skew: Duration::from_secs(30),
+        }
+    }
+}
+
+impl MinterSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`MinterSettings::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let settings = Self {
+            enabled: bool_setting(&get, "MCP_LICENCE_MINTER_ENABLED", false)?,
+            url: get("MCP_LICENCE_MINTER_URL"),
+            token_url: get("MCP_LICENCE_MINTER_TOKEN_URL"),
+            client_id: get("MCP_LICENCE_MINTER_CLIENT_ID")
+                .unwrap_or_else(|| "mcp-bundle-minter".to_owned()),
+            secret_file: get("MCP_LICENCE_MINTER_SECRET_FILE").map(PathBuf::from),
+            ttl: Duration::from_secs(
+                u64_setting(&get, "MCP_LICENCE_MINTER_TTL_MINUTES", 15, 1, 60)? * 60,
+            ),
+            skew: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_LICENCE_MINTER_SKEW_SECONDS",
+                30,
+                0,
+                300,
+            )?),
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// When enabled, minting requires the licences URL, the token URL and the client secret
+    /// file, and both URLs must be http(s) authorities (the reference's `checked_url`).
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.url.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_LICENCE_MINTER_URL",
+                reason: "licence minting requires the licences URL".into(),
+            });
+        }
+        if self.token_url.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_LICENCE_MINTER_TOKEN_URL",
+                reason: "licence minting requires the token URL".into(),
+            });
+        }
+        if self.secret_file.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_LICENCE_MINTER_SECRET_FILE",
+                reason: "licence minting requires the client secret file".into(),
+            });
+        }
+        if let Some(url) = &self.url {
+            checked_http_url("MCP_LICENCE_MINTER_URL", url)?;
+        }
+        if let Some(url) = &self.token_url {
+            checked_http_url("MCP_LICENCE_MINTER_TOKEN_URL", url)?;
+        }
+        Ok(())
+    }
+}
+
 /// Authentication configuration for the `/mcp` surface.
 ///
 /// Env names are the reference service's `src/config.py` names: pydantic-settings with prefix
@@ -462,6 +894,34 @@ fn checked_authority_url(value: &str, allow_http: bool) -> Result<(), ConfigErro
     Ok(())
 }
 
+/// An http(s) URL with a host and no credentials, query string or fragment: the reference's
+/// `checked_url`, with both schemes allowed (unlike [`checked_authority_url`]).
+fn checked_http_url(name: &'static str, value: &str) -> Result<(), ConfigError> {
+    let invalid = |reason: &str| ConfigError::Invalid {
+        name,
+        reason: reason.to_owned(),
+    };
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .ok_or_else(|| invalid("URLs require http or https"))?;
+    if value.contains('#') || value.contains('?') {
+        return Err(invalid("URLs must not carry a fragment or query"));
+    }
+    let authority = rest.split('/').next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return Err(invalid("URLs require a host and no credentials"));
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    if host.is_empty() {
+        return Err(invalid("URLs require a host"));
+    }
+    Ok(())
+}
+
 /// A comma-separated list: surrounding whitespace is trimmed and empty entries are dropped.
 fn comma_list(raw: Option<String>) -> Vec<String> {
     raw.map(|value| {
@@ -494,6 +954,29 @@ fn tenant_ids(raw: Option<String>) -> Result<Vec<Rfc4122Uuid>, ConfigError> {
         .collect()
 }
 
+/// A 32-byte AES-256-GCM key from padded or unpadded base64url (the reference's
+/// `sources/crypto.py:decode_key`).
+fn decode_source_secret_key(value: &str) -> Result<(), ConfigError> {
+    let invalid = |reason: &str| ConfigError::Invalid {
+        name: "MCP_SOURCE_SECRET_KEY",
+        reason: reason.to_owned(),
+    };
+    let mut padded = value.trim().to_owned();
+    match padded.len() % 4 {
+        0 => {}
+        2 => padded.push_str("=="),
+        3 => padded.push('='),
+        _ => return Err(invalid("must be base64url")),
+    }
+    let key = URL_SAFE
+        .decode(padded.as_bytes())
+        .map_err(|_| invalid("must be base64url"))?;
+    if key.len() != 32 {
+        return Err(invalid("must decode to 32 bytes"));
+    }
+    Ok(())
+}
+
 fn bool_setting(
     get: &impl Fn(&str) -> Option<String>,
     name: &'static str,
@@ -516,6 +999,17 @@ fn bool_value(name: &'static str, value: &str) -> Result<bool, ConfigError> {
             name,
             reason: format!("{value:?} is not one of true/false/1/0"),
         })
+    }
+}
+
+/// The execution switch, shared by [`Config`] and [`WorkerSettings`]. `EXECUTION_ENABLED` is
+/// this service's name; the reference's prefixed `MCP_EXECUTION_ENABLED` is accepted as an alias
+/// during the drop-in cutover, and the unprefixed name wins when both are set.
+fn execution_enabled_setting(get: &impl Fn(&str) -> Option<String>) -> Result<bool, ConfigError> {
+    match (get("EXECUTION_ENABLED"), get("MCP_EXECUTION_ENABLED")) {
+        (Some(value), _) => bool_value("EXECUTION_ENABLED", &value),
+        (None, Some(value)) => bool_value("MCP_EXECUTION_ENABLED", &value),
+        (None, None) => Ok(false),
     }
 }
 
@@ -552,6 +1046,44 @@ fn u32_setting(
             _ => Err(ConfigError::Invalid {
                 name,
                 reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+fn u16_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: u16,
+    minimum: u16,
+    maximum: u16,
+) -> Result<u16, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<u16>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+/// A strictly positive `u32`: the reference uses `gt=0` without an upper bound for a few
+/// settings (per-tenant slots, heartbeat), whose real limit is a cross-setting rule.
+fn positive_u32_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: u32,
+) -> Result<u32, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<u32>() {
+            Ok(parsed) if parsed > 0 => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not a positive integer"),
             }),
         },
     }
@@ -1008,6 +1540,570 @@ mod tests {
             ConfigError::Invalid {
                 name: "MCP_EXECUTION_ENABLED",
                 reason: "\"not-a-bool\" is not one of true/false/1/0".into(),
+            }
+        );
+    }
+
+    fn worker_settings(pairs: &[(&str, &str)]) -> Result<WorkerSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        WorkerSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    fn minter_settings(pairs: &[(&str, &str)]) -> Result<MinterSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        MinterSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn worker_settings_take_reference_defaults() {
+        let defaults = WorkerSettings::default();
+        assert_eq!(defaults.probe_port, 8_034);
+        assert_eq!(defaults.max_inflight, 8);
+        assert_eq!(defaults.global_slots, 1);
+        assert_eq!(defaults.per_tenant_slots, 1);
+        assert_eq!(defaults.run_start_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.run_max, Duration::from_secs(60));
+        assert_eq!(defaults.lease, Duration::from_secs(30));
+        assert_eq!(defaults.heartbeat, Duration::from_secs(5));
+        assert_eq!(defaults.reconcile, Duration::from_secs(10));
+        assert_eq!(defaults.api_max_inflight, 8);
+        assert_eq!(defaults.api_concurrency_global, 8);
+        assert_eq!(defaults.api_concurrency_per_service, 8);
+        assert_eq!(defaults.api_max_calls_per_minute, 60);
+        assert_eq!(defaults.api_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.api_max_response_bytes, 262_144);
+        assert_eq!(defaults.max_frame_bytes, 65_536);
+        assert_eq!(defaults.max_output_bytes, 1_048_576);
+        assert_eq!(defaults.max_log_bytes, 8_192);
+        assert_eq!(defaults.max_frames, 256);
+        assert_eq!(defaults.run_namespace, "mcp-runs");
+        assert!(defaults.kata_runtime_class.is_none());
+        assert!(defaults.runner_image_digest.is_none());
+        assert!(defaults.approved_runner_images.is_empty());
+        assert_eq!(defaults.run_memory_request_mi, 256);
+        assert_eq!(defaults.run_memory_limit_mi, 256);
+        assert_eq!(defaults.run_cpu_request, 250);
+        assert_eq!(defaults.run_cpu_limit, 250);
+        assert!(defaults.credential_bundle_file.is_none());
+        assert_eq!(defaults.licence_minter, MinterSettings::default());
+        assert!(defaults.source_secret_key.is_none());
+        assert_eq!(
+            defaults.builder_oauth_token_max_ttl,
+            Duration::from_secs(3_600)
+        );
+        assert_eq!(defaults.builder_source_calls_per_minute, 60);
+        assert_eq!(defaults.builder_source_concurrency, 2);
+        assert!(defaults.service_limits_file.is_none());
+        assert_eq!(worker_settings(&[]).unwrap(), defaults);
+        assert!(defaults.validate(false).is_ok());
+    }
+
+    #[test]
+    fn worker_settings_read_every_env_name() {
+        let padded_key = format!("{}=", "A".repeat(43));
+        let configured = worker_settings(&[
+            ("MCP_WORKER_PROBE_PORT", "9001"),
+            ("MCP_WORKER_MAX_INFLIGHT", "4"),
+            ("MCP_EXECUTION_GLOBAL_SLOTS", "2"),
+            ("MCP_EXECUTION_PER_TENANT_SLOTS", "2"),
+            ("MCP_RUN_START_TIMEOUT_SECONDS", "15"),
+            ("MCP_RUN_MAX_SECONDS", "120"),
+            ("MCP_LEASE_SECONDS", "90"),
+            ("MCP_HEARTBEAT_SECONDS", "20"),
+            ("MCP_RECONCILE_SECONDS", "20"),
+            ("MCP_API_MAX_INFLIGHT", "3"),
+            ("MCP_API_CONCURRENCY_GLOBAL", "5"),
+            ("MCP_API_CONCURRENCY_PER_SERVICE", "7"),
+            ("MCP_API_MAX_CALLS_PER_MINUTE", "120"),
+            ("MCP_API_TIMEOUT_SECONDS", "45"),
+            ("MCP_API_MAX_RESPONSE_BYTES", "1024"),
+            ("MCP_MAX_FRAME_BYTES", "2048"),
+            ("MCP_MAX_OUTPUT_BYTES", "4096"),
+            ("MCP_MAX_LOG_BYTES", "1024"),
+            ("MCP_MAX_FRAMES", "64"),
+            ("MCP_RUN_NAMESPACE", "mcp-runs"),
+            ("MCP_KATA_RUNTIME_CLASS", "kata-cc"),
+            ("MCP_RUNNER_IMAGE_DIGEST", "sha256:abc"),
+            (
+                "MCP_APPROVED_RUNNER_IMAGES",
+                "registry.example/runner@sha256:aaa, registry.example/other@sha256:bbb ,",
+            ),
+            ("MCP_RUN_MEMORY_REQUEST_MI", "512"),
+            ("MCP_RUN_MEMORY_LIMIT_MI", "1024"),
+            ("MCP_RUN_CPU_REQUEST", "500"),
+            ("MCP_RUN_CPU_LIMIT", "1000"),
+            ("MCP_CREDENTIAL_BUNDLE_FILE", "/run/credentials/bundle.json"),
+            ("MCP_LICENCE_MINTER_ENABLED", "true"),
+            ("MCP_LICENCE_MINTER_URL", "https://licences.internal"),
+            (
+                "MCP_LICENCE_MINTER_TOKEN_URL",
+                "https://auth.internal/token",
+            ),
+            ("MCP_LICENCE_MINTER_CLIENT_ID", "minter"),
+            ("MCP_LICENCE_MINTER_SECRET_FILE", "/run/secrets/minter"),
+            ("MCP_LICENCE_MINTER_TTL_MINUTES", "30"),
+            ("MCP_LICENCE_MINTER_SKEW_SECONDS", "10"),
+            ("MCP_SOURCE_SECRET_KEY", padded_key.as_str()),
+            ("MCP_BUILDER_OAUTH_TOKEN_MAX_TTL", "7200"),
+            ("MCP_BUILDER_SOURCE_CALLS_PER_MINUTE", "120"),
+            ("MCP_BUILDER_SOURCE_CONCURRENCY", "8"),
+            ("MCP_BUILDER_SERVICE_LIMITS_FILE", "/etc/mcp/limits.json"),
+        ])
+        .unwrap();
+        assert_eq!(configured.probe_port, 9_001);
+        assert_eq!(configured.max_inflight, 4);
+        assert_eq!(configured.global_slots, 2);
+        assert_eq!(configured.per_tenant_slots, 2);
+        assert_eq!(configured.run_start_timeout, Duration::from_secs(15));
+        assert_eq!(configured.run_max, Duration::from_secs(120));
+        assert_eq!(configured.lease, Duration::from_secs(90));
+        assert_eq!(configured.heartbeat, Duration::from_secs(20));
+        assert_eq!(configured.reconcile, Duration::from_secs(20));
+        assert_eq!(configured.api_max_inflight, 3);
+        assert_eq!(configured.api_concurrency_global, 5);
+        assert_eq!(configured.api_concurrency_per_service, 7);
+        assert_eq!(configured.api_max_calls_per_minute, 120);
+        assert_eq!(configured.api_timeout, Duration::from_secs(45));
+        assert_eq!(configured.api_max_response_bytes, 1_024);
+        assert_eq!(configured.max_frame_bytes, 2_048);
+        assert_eq!(configured.max_output_bytes, 4_096);
+        assert_eq!(configured.max_log_bytes, 1_024);
+        assert_eq!(configured.max_frames, 64);
+        assert_eq!(configured.run_namespace, "mcp-runs");
+        assert_eq!(configured.kata_runtime_class.as_deref(), Some("kata-cc"));
+        assert_eq!(
+            configured.runner_image_digest.as_deref(),
+            Some("sha256:abc")
+        );
+        assert_eq!(
+            configured.approved_runner_images,
+            vec![
+                "registry.example/runner@sha256:aaa".to_owned(),
+                "registry.example/other@sha256:bbb".to_owned(),
+            ]
+        );
+        assert_eq!(configured.run_memory_request_mi, 512);
+        assert_eq!(configured.run_memory_limit_mi, 1_024);
+        assert_eq!(configured.run_cpu_request, 500);
+        assert_eq!(configured.run_cpu_limit, 1_000);
+        assert_eq!(
+            configured.credential_bundle_file,
+            Some(PathBuf::from("/run/credentials/bundle.json"))
+        );
+        assert!(configured.licence_minter.enabled);
+        assert_eq!(
+            configured.licence_minter.url.as_deref(),
+            Some("https://licences.internal")
+        );
+        assert_eq!(
+            configured.licence_minter.token_url.as_deref(),
+            Some("https://auth.internal/token")
+        );
+        assert_eq!(configured.licence_minter.client_id, "minter");
+        assert_eq!(
+            configured.licence_minter.secret_file,
+            Some(PathBuf::from("/run/secrets/minter"))
+        );
+        assert_eq!(configured.licence_minter.ttl, Duration::from_secs(30 * 60));
+        assert_eq!(configured.licence_minter.skew, Duration::from_secs(10));
+        assert_eq!(
+            configured.source_secret_key.as_deref(),
+            Some(padded_key.as_str())
+        );
+        assert_eq!(
+            configured.builder_oauth_token_max_ttl,
+            Duration::from_secs(7_200)
+        );
+        assert_eq!(configured.builder_source_calls_per_minute, 120);
+        assert_eq!(configured.builder_source_concurrency, 8);
+        assert_eq!(
+            configured.service_limits_file,
+            Some(PathBuf::from("/etc/mcp/limits.json"))
+        );
+    }
+
+    #[test]
+    fn worker_settings_refuse_every_out_of_range_bound() {
+        for (name, value) in [
+            ("MCP_WORKER_PROBE_PORT", "1023"),
+            ("MCP_WORKER_PROBE_PORT", "65536"),
+            ("MCP_WORKER_PROBE_PORT", "-1"),
+            ("MCP_WORKER_MAX_INFLIGHT", "0"),
+            ("MCP_WORKER_MAX_INFLIGHT", "129"),
+            ("MCP_EXECUTION_GLOBAL_SLOTS", "0"),
+            ("MCP_EXECUTION_GLOBAL_SLOTS", "129"),
+            ("MCP_EXECUTION_PER_TENANT_SLOTS", "0"),
+            ("MCP_RUN_START_TIMEOUT_SECONDS", "0"),
+            ("MCP_RUN_START_TIMEOUT_SECONDS", "121"),
+            ("MCP_RUN_MAX_SECONDS", "0"),
+            ("MCP_RUN_MAX_SECONDS", "301"),
+            ("MCP_LEASE_SECONDS", "9"),
+            ("MCP_LEASE_SECONDS", "301"),
+            ("MCP_HEARTBEAT_SECONDS", "0"),
+            ("MCP_RECONCILE_SECONDS", "0"),
+            ("MCP_RECONCILE_SECONDS", "61"),
+            ("MCP_API_MAX_INFLIGHT", "0"),
+            ("MCP_API_MAX_INFLIGHT", "101"),
+            ("MCP_API_CONCURRENCY_GLOBAL", "0"),
+            ("MCP_API_CONCURRENCY_GLOBAL", "101"),
+            ("MCP_API_CONCURRENCY_PER_SERVICE", "0"),
+            ("MCP_API_CONCURRENCY_PER_SERVICE", "101"),
+            ("MCP_API_MAX_CALLS_PER_MINUTE", "0"),
+            ("MCP_API_MAX_CALLS_PER_MINUTE", "10001"),
+            ("MCP_API_TIMEOUT_SECONDS", "0"),
+            ("MCP_API_TIMEOUT_SECONDS", "301"),
+            ("MCP_API_MAX_RESPONSE_BYTES", "0"),
+            ("MCP_API_MAX_RESPONSE_BYTES", "10485761"),
+            ("MCP_MAX_FRAME_BYTES", "0"),
+            ("MCP_MAX_FRAME_BYTES", "1048577"),
+            ("MCP_MAX_OUTPUT_BYTES", "0"),
+            ("MCP_MAX_OUTPUT_BYTES", "4194305"),
+            ("MCP_MAX_LOG_BYTES", "0"),
+            ("MCP_MAX_LOG_BYTES", "65537"),
+            ("MCP_MAX_FRAMES", "0"),
+            ("MCP_MAX_FRAMES", "1001"),
+            ("MCP_RUN_MEMORY_REQUEST_MI", "31"),
+            ("MCP_RUN_MEMORY_REQUEST_MI", "1025"),
+            ("MCP_RUN_MEMORY_LIMIT_MI", "31"),
+            ("MCP_RUN_MEMORY_LIMIT_MI", "1025"),
+            ("MCP_RUN_CPU_REQUEST", "9"),
+            ("MCP_RUN_CPU_REQUEST", "1001"),
+            ("MCP_RUN_CPU_LIMIT", "9"),
+            ("MCP_RUN_CPU_LIMIT", "1001"),
+            ("MCP_BUILDER_OAUTH_TOKEN_MAX_TTL", "29"),
+            ("MCP_BUILDER_OAUTH_TOKEN_MAX_TTL", "86401"),
+            ("MCP_BUILDER_SOURCE_CALLS_PER_MINUTE", "0"),
+            ("MCP_BUILDER_SOURCE_CALLS_PER_MINUTE", "100001"),
+            ("MCP_BUILDER_SOURCE_CONCURRENCY", "0"),
+            ("MCP_BUILDER_SOURCE_CONCURRENCY", "101"),
+            ("MCP_LICENCE_MINTER_TTL_MINUTES", "0"),
+            ("MCP_LICENCE_MINTER_TTL_MINUTES", "61"),
+            ("MCP_LICENCE_MINTER_SKEW_SECONDS", "301"),
+            ("MCP_WORKER_MAX_INFLIGHT", "many"),
+            ("MCP_HEARTBEAT_SECONDS", "many"),
+        ] {
+            assert!(
+                worker_settings(&[(name, value)]).is_err(),
+                "{name}={value} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_settings_cross_check_the_reference_rules() {
+        // The lease must exceed three heartbeat intervals; equality is refused.
+        assert_eq!(
+            worker_settings(&[("MCP_HEARTBEAT_SECONDS", "10"), ("MCP_LEASE_SECONDS", "30"),])
+                .unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_HEARTBEAT_SECONDS",
+                reason: "lease must be longer than three heartbeat intervals".into(),
+            }
+        );
+        assert!(
+            worker_settings(&[("MCP_HEARTBEAT_SECONDS", "9"), ("MCP_LEASE_SECONDS", "30"),])
+                .is_ok()
+        );
+        // One tenant can never hold more slots than the global pool; equality is allowed.
+        assert_eq!(
+            worker_settings(&[
+                ("MCP_EXECUTION_GLOBAL_SLOTS", "2"),
+                ("MCP_EXECUTION_PER_TENANT_SLOTS", "3"),
+            ])
+            .unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_EXECUTION_PER_TENANT_SLOTS",
+                reason: "per-tenant slots exceed the global slots".into(),
+            }
+        );
+        assert!(
+            worker_settings(&[
+                ("MCP_EXECUTION_GLOBAL_SLOTS", "2"),
+                ("MCP_EXECUTION_PER_TENANT_SLOTS", "2"),
+            ])
+            .is_ok()
+        );
+        // One protocol frame can never be allowed to exceed the aggregate output bound.
+        assert_eq!(
+            worker_settings(&[
+                ("MCP_MAX_FRAME_BYTES", "4096"),
+                ("MCP_MAX_OUTPUT_BYTES", "2048"),
+            ])
+            .unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_MAX_FRAME_BYTES",
+                reason: "frame limit exceeds the aggregate output limit".into(),
+            }
+        );
+        assert!(
+            worker_settings(&[
+                ("MCP_MAX_FRAME_BYTES", "2048"),
+                ("MCP_MAX_OUTPUT_BYTES", "2048"),
+            ])
+            .is_ok()
+        );
+        // Runner requests may not exceed their limits, for memory and for CPU.
+        assert_eq!(
+            worker_settings(&[
+                ("MCP_RUN_MEMORY_REQUEST_MI", "512"),
+                ("MCP_RUN_MEMORY_LIMIT_MI", "256"),
+            ])
+            .unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_RUN_MEMORY_REQUEST_MI",
+                reason: "runner requests exceed limits".into(),
+            }
+        );
+        assert_eq!(
+            worker_settings(&[("MCP_RUN_CPU_REQUEST", "500"), ("MCP_RUN_CPU_LIMIT", "250"),])
+                .unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_RUN_CPU_REQUEST",
+                reason: "runner requests exceed limits".into(),
+            }
+        );
+        assert!(
+            worker_settings(&[
+                ("MCP_RUN_MEMORY_REQUEST_MI", "512"),
+                ("MCP_RUN_MEMORY_LIMIT_MI", "512"),
+                ("MCP_RUN_CPU_REQUEST", "500"),
+                ("MCP_RUN_CPU_LIMIT", "500"),
+            ])
+            .is_ok()
+        );
+        // Runner pods live in the dedicated namespace and nowhere else.
+        assert_eq!(
+            worker_settings(&[("MCP_RUN_NAMESPACE", "runs")]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_RUN_NAMESPACE",
+                reason: "execution requires the dedicated mcp-runs namespace".into(),
+            }
+        );
+        assert!(worker_settings(&[("MCP_RUN_NAMESPACE", "mcp-runs")]).is_ok());
+    }
+
+    #[test]
+    fn worker_settings_require_configuration_when_execution_is_enabled() {
+        let on = ("EXECUTION_ENABLED", "true");
+        let images = (
+            "MCP_APPROVED_RUNNER_IMAGES",
+            "registry.example/runner@sha256:aaa",
+        );
+        let kata = ("MCP_KATA_RUNTIME_CLASS", "kata-cc");
+        let digest = ("MCP_RUNNER_IMAGE_DIGEST", "sha256:abc");
+        let bundle = ("MCP_CREDENTIAL_BUNDLE_FILE", "/run/credentials/bundle.json");
+
+        let missing_images = ConfigError::Invalid {
+            name: "MCP_APPROVED_RUNNER_IMAGES",
+            reason: "execution requires approved runner images".into(),
+        };
+        // Both spellings of the switch are read; the enabled worker needs an approved image.
+        assert_eq!(worker_settings(&[on]).unwrap_err(), missing_images);
+        assert_eq!(
+            worker_settings(&[("MCP_EXECUTION_ENABLED", "true")]).unwrap_err(),
+            missing_images
+        );
+        // The unprefixed name wins when both are set.
+        assert!(
+            worker_settings(&[
+                ("EXECUTION_ENABLED", "false"),
+                ("MCP_EXECUTION_ENABLED", "true"),
+            ])
+            .is_ok()
+        );
+        assert_eq!(
+            worker_settings(&[on, images]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_KATA_RUNTIME_CLASS",
+                reason: "execution requires a Kata runtime class".into(),
+            }
+        );
+        assert_eq!(
+            worker_settings(&[on, images, kata]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_RUNNER_IMAGE_DIGEST",
+                reason: "execution requires a runner image digest".into(),
+            }
+        );
+        // With every prerequisite but a credential source, the worker still refuses to start.
+        assert_eq!(
+            worker_settings(&[on, images, kata, digest]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_CREDENTIAL_BUNDLE_FILE",
+                reason: "a worker requires a credential bundle file or the licence minter".into(),
+            }
+        );
+        // Either a mounted bundle or an enabled minter satisfies the credential source; the
+        // prefixed switch carries the same prerequisites.
+        assert!(worker_settings(&[on, images, kata, digest, bundle]).is_ok());
+        assert!(
+            worker_settings(&[
+                ("MCP_EXECUTION_ENABLED", "true"),
+                images,
+                kata,
+                digest,
+                bundle,
+            ])
+            .is_ok()
+        );
+        assert!(
+            worker_settings(&[
+                on,
+                images,
+                kata,
+                digest,
+                ("MCP_LICENCE_MINTER_ENABLED", "true"),
+                ("MCP_LICENCE_MINTER_URL", "https://licences.internal"),
+                (
+                    "MCP_LICENCE_MINTER_TOKEN_URL",
+                    "https://auth.internal/token"
+                ),
+                ("MCP_LICENCE_MINTER_SECRET_FILE", "/run/secrets/minter"),
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn minter_settings_take_reference_defaults_and_env_names() {
+        let defaults = MinterSettings::default();
+        assert!(!defaults.enabled);
+        assert!(defaults.url.is_none());
+        assert!(defaults.token_url.is_none());
+        assert_eq!(defaults.client_id, "mcp-bundle-minter");
+        assert!(defaults.secret_file.is_none());
+        assert_eq!(defaults.ttl, Duration::from_secs(15 * 60));
+        assert_eq!(defaults.skew, Duration::from_secs(30));
+        assert_eq!(minter_settings(&[]).unwrap(), defaults);
+        assert!(defaults.validate().is_ok());
+
+        let configured = minter_settings(&[
+            ("MCP_LICENCE_MINTER_ENABLED", "true"),
+            ("MCP_LICENCE_MINTER_URL", "https://licences.internal/"),
+            ("MCP_LICENCE_MINTER_TOKEN_URL", "http://auth.internal/token"),
+            ("MCP_LICENCE_MINTER_CLIENT_ID", "minter"),
+            ("MCP_LICENCE_MINTER_SECRET_FILE", "/run/secrets/minter"),
+            ("MCP_LICENCE_MINTER_TTL_MINUTES", "45"),
+            ("MCP_LICENCE_MINTER_SKEW_SECONDS", "0"),
+        ])
+        .unwrap();
+        assert!(configured.enabled);
+        assert_eq!(
+            configured.url.as_deref(),
+            Some("https://licences.internal/")
+        );
+        assert_eq!(
+            configured.token_url.as_deref(),
+            Some("http://auth.internal/token")
+        );
+        assert_eq!(configured.client_id, "minter");
+        assert_eq!(
+            configured.secret_file,
+            Some(PathBuf::from("/run/secrets/minter"))
+        );
+        assert_eq!(configured.ttl, Duration::from_secs(45 * 60));
+        assert_eq!(configured.skew, Duration::ZERO);
+    }
+
+    #[test]
+    fn minter_settings_require_urls_and_a_secret_file_when_enabled() {
+        let on = ("MCP_LICENCE_MINTER_ENABLED", "true");
+        let url = ("MCP_LICENCE_MINTER_URL", "https://licences.internal");
+        let token_url = (
+            "MCP_LICENCE_MINTER_TOKEN_URL",
+            "https://auth.internal/token",
+        );
+        let secret = ("MCP_LICENCE_MINTER_SECRET_FILE", "/run/secrets/minter");
+        assert_eq!(
+            minter_settings(&[on, token_url, secret]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_LICENCE_MINTER_URL",
+                reason: "licence minting requires the licences URL".into(),
+            }
+        );
+        assert_eq!(
+            minter_settings(&[on, url, secret]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_LICENCE_MINTER_TOKEN_URL",
+                reason: "licence minting requires the token URL".into(),
+            }
+        );
+        assert_eq!(
+            minter_settings(&[on, url, token_url]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_LICENCE_MINTER_SECRET_FILE",
+                reason: "licence minting requires the client secret file".into(),
+            }
+        );
+        assert!(minter_settings(&[on, url, token_url, secret]).is_ok());
+    }
+
+    #[test]
+    fn minter_settings_refuse_urls_that_are_not_plain_http_authorities() {
+        let with_url = |name: &'static str, value: &'static str| {
+            minter_settings(&[
+                ("MCP_LICENCE_MINTER_ENABLED", "true"),
+                ("MCP_LICENCE_MINTER_URL", "https://licences.internal"),
+                (
+                    "MCP_LICENCE_MINTER_TOKEN_URL",
+                    "https://auth.internal/token",
+                ),
+                ("MCP_LICENCE_MINTER_SECRET_FILE", "/run/secrets/minter"),
+                (name, value),
+            ])
+        };
+        for value in [
+            "ftp://licences.internal",
+            "licences.internal",
+            "https://",
+            "https://user@licences.internal",
+            "https://licences.internal?tenant=1",
+            "https://licences.internal#fragment",
+        ] {
+            assert!(
+                with_url("MCP_LICENCE_MINTER_URL", value).is_err(),
+                "MCP_LICENCE_MINTER_URL={value} must be refused"
+            );
+            assert!(
+                with_url("MCP_LICENCE_MINTER_TOKEN_URL", value).is_err(),
+                "MCP_LICENCE_MINTER_TOKEN_URL={value} must be refused"
+            );
+        }
+        assert!(with_url("MCP_LICENCE_MINTER_URL", "http://licences.internal:8443").is_ok());
+    }
+
+    #[test]
+    fn source_secret_key_must_decode_to_thirty_two_bytes() {
+        let unpadded = "A".repeat(43);
+        let padded = format!("{unpadded}=");
+        assert!(
+            worker_settings(&[("MCP_SOURCE_SECRET_KEY", unpadded.as_str())]).is_ok(),
+            "unpadded base64url"
+        );
+        assert!(
+            worker_settings(&[("MCP_SOURCE_SECRET_KEY", padded.as_str())]).is_ok(),
+            "padded base64url"
+        );
+        for value in ["A".repeat(22), "A".repeat(44)] {
+            assert_eq!(
+                worker_settings(&[("MCP_SOURCE_SECRET_KEY", value.as_str())]).unwrap_err(),
+                ConfigError::Invalid {
+                    name: "MCP_SOURCE_SECRET_KEY",
+                    reason: "must decode to 32 bytes".into(),
+                }
+            );
+        }
+        assert_eq!(
+            worker_settings(&[("MCP_SOURCE_SECRET_KEY", "not base64url!")]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_SOURCE_SECRET_KEY",
+                reason: "must be base64url".into(),
             }
         );
     }

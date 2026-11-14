@@ -370,7 +370,10 @@ async fn event(
 
 /// The run columns every statement projects, in the decoder's order. Instants travel as epoch
 /// microseconds because this crate's `sqlx` build carries no `chrono` type mapping.
-const RUN_COLUMNS: &str = "run_id::text AS run_id, tenant_id::text AS tenant_id, \
+///
+/// `pub(crate)` so the worker store projects the identical run snapshot and decodes it with
+/// [`decode_run`] rather than keeping a second copy of the column list.
+pub(crate) const RUN_COLUMNS: &str = "run_id::text AS run_id, tenant_id::text AS tenant_id, \
      gateway_license_id::text AS gateway_license_id, \
      owner_tenant_id::text AS owner_tenant_id, tool_id::text AS tool_id, \
      binding_id::text AS binding_id, binding_revision, \
@@ -384,7 +387,9 @@ const RUN_COLUMNS: &str = "run_id::text AS run_id, tenant_id::text AS tenant_id,
      (extract(epoch FROM payload_expired_at) * 1000000)::bigint AS payload_expired_at_us, \
      mode, runtime, external_ref, status_message, actor";
 
-fn decode_run(row: &PgRow) -> Result<RunRow, ExecutionStoreError> {
+/// Decode one row selected with [`RUN_COLUMNS`]; the worker adds its own columns to the same
+/// projection and calls this for the run half.
+pub(crate) fn decode_run(row: &PgRow) -> Result<RunRow, ExecutionStoreError> {
     let status: String = row.try_get("status")?;
     Ok(RunRow {
         run_id: identity(row.try_get::<String, _>("run_id")?)?,

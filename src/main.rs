@@ -22,6 +22,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Two rustls providers are linked into this binary; pick one before any TLS client exists.
+    mcp_server_rs::install_crypto_provider();
     let cli = Cli::parse();
     if cli.print_openapi {
         return match openapi().to_pretty_json() {
