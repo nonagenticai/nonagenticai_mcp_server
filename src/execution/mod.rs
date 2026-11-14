@@ -5,10 +5,12 @@
 //! `src/tasks/extension.py` and `src/auth/principal.py`. Everything here is a pure function of
 //! its arguments; the queue, the repository and the protocol surface are later slices.
 //!
-//! Wire compatibility is the point: the Python worker deserialises the stored `authority`
-//! column and re-derives `input_hash` from the same canonical JSON, so both must match the
-//! reference byte for byte. `tests/fixtures/phase3a/oracle.json` (generated from the pinned
-//! reference) is the specification.
+//! Wire compatibility is the point. The Python worker reads the stored `authority` column with
+//! `ToolManifest.model_validate_json` and friends, so each member is that model's own JSON
+//! *string* and must carry the reference's content (key order is not part of the contract; a
+//! parsed-value comparison is). `input_hash` is the reference's canonical JSON digest and must
+//! match exactly — the worker compares it to decide an idempotent replay. Both are pinned by
+//! `tests/fixtures/phase3a/oracle.json`, generated from the pinned reference.
 
 pub mod service;
 
@@ -267,7 +269,7 @@ fn write_value(value: &Value, out: &mut String) {
             } else if let Some(integer) = number.as_u64() {
                 out.push_str(&integer.to_string());
             } else if let Some(float) = number.as_f64() {
-                write_float(float, out);
+                out.push_str(&python_float_repr(float));
             } else {
                 // A JSON number is always i64, u64 or f64; nothing else can be printed.
                 out.push_str("null");
@@ -328,12 +330,13 @@ fn write_string(value: &str, out: &mut String) {
 /// Python's `repr(float)` layout: the shortest round-trip digits, positioned per Python's
 /// rule — fixed notation while `-4 < decpt <= 16`, scientific outside it, and an exponent
 /// always carrying a sign and at least two digits.
-fn write_float(value: f64, out: &mut String) {
+pub(crate) fn python_float_repr(value: f64) -> String {
+    let mut out = String::new();
     if !value.is_finite() {
         // `serde_json::Value` cannot hold a non-finite number, so this arm is unreachable for
         // parsed JSON; printing null keeps the function total.
         out.push_str("null");
-        return;
+        return out;
     }
     if value.is_sign_negative() {
         out.push('-');
@@ -349,7 +352,7 @@ fn write_float(value: f64, out: &mut String) {
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
     let Some(first) = digits.chars().next() else {
         out.push_str("0.0");
-        return;
+        return out;
     };
     let decpt = exponent + 1;
     if decpt <= -4 || decpt > 16 {
@@ -384,6 +387,7 @@ fn write_float(value: f64, out: &mut String) {
         out.push('.');
         out.push_str(fraction);
     }
+    out
 }
 
 /// Lowercase hex, one byte at a time.

@@ -369,9 +369,6 @@ impl McpServer {
         // The text is `json.dumps(envelope)` — the reference's separator layout, so a client
         // reading `content[0].text` sees what the Python service would have written.
         let encoded = crate::tasks::envelope_text(&envelope);
-        if encoded.is_empty() {
-            return Ok(call_refusal(CALL_REFUSAL));
-        }
         let limit = usize::try_from(tool.effective.limits.output_bytes)
             .unwrap_or(usize::MAX)
             .min(self.settings.protocol_output_bytes / 2);

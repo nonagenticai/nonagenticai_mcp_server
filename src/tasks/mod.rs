@@ -309,6 +309,14 @@ fn python_json(value: &Value) -> String {
         {
             writer.write_all(b": ")
         }
+
+        /// Python's `repr(float)` (`1e+16`, `1e-05`), not serde's (`1e16`, `1e-5`).
+        fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> io::Result<()>
+        where
+            W: ?Sized + io::Write,
+        {
+            writer.write_all(crate::execution::python_float_repr(value).as_bytes())
+        }
     }
 
     let mut out = Vec::new();
@@ -519,4 +527,34 @@ pub async fn fr_meta(
         "activity": activity,
         "signals": signals(row, &history, settings, now),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The text a client reads must be `json.dumps` exactly, floats included: serde's own
+    /// writer spells `1e16` and Python spells `1e+16`.
+    #[test]
+    fn the_python_json_writer_matches_json_dumps() {
+        assert_eq!(
+            python_json(&json!({"a": 1, "b": [1.5, 1e16, 1e-5], "c": "x"})),
+            "{\"a\": 1, \"b\": [1.5, 1e+16, 1e-05], \"c\": \"x\"}"
+        );
+    }
+
+    /// Python's `datetime.isoformat()`: a whole second carries no fractional part, anything
+    /// finer carries six digits.
+    #[test]
+    fn iso8601_matches_python_isoformat() {
+        let whole = DateTime::parse_from_rfc3339("2026-11-14T12:00:00Z")
+            .expect("an instant")
+            .with_timezone(&Utc);
+        let micros = DateTime::parse_from_rfc3339("2026-11-14T12:00:00.123000Z")
+            .expect("an instant")
+            .with_timezone(&Utc);
+        assert_eq!(iso8601(whole), "2026-11-14T12:00:00+00:00");
+        assert_eq!(iso8601(micros), "2026-11-14T12:00:00.123000+00:00");
+    }
 }
