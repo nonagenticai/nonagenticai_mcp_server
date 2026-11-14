@@ -70,6 +70,7 @@ async fn serve() -> Result<(), StartupError> {
                 pool,
                 execution_enabled: cfg.execution_enabled,
                 license_app_key: auth_config.license_app_key.clone(),
+                approved_runner_images: cfg.approved_runner_images.clone(),
             },
             &auth_config,
         )?,

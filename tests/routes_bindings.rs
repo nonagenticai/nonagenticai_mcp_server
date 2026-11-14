@@ -190,6 +190,7 @@ impl Fixture {
                 pool: self.pool.clone(),
                 execution_enabled: false,
                 license_app_key: Some(GATEWAY_APP_KEY.to_owned()),
+                approved_runner_images: Vec::new(),
             },
             auth(),
         )

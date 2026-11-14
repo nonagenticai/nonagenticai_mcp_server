@@ -99,6 +99,12 @@ impl ToolkitService {
         }
     }
 
+    /// The exact-selection resolver this service reads tools through (the catalog resolver's
+    /// bulk read).
+    pub fn resolver(&self) -> &SelectionResolver {
+        &self.resolver
+    }
+
     /// The reference's operator gate: only a management principal may write toolkits.
     pub fn operator(principal: &Principal) -> Result<Attribution, ToolkitServiceError> {
         if !principal.management {

@@ -9,6 +9,7 @@ pub mod lifecycle;
 pub mod models;
 pub mod package;
 pub mod public;
+pub mod resolver;
 pub mod service;
 pub mod toolkit_models;
 pub mod validation;

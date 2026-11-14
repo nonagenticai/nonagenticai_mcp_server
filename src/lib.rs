@@ -32,6 +32,8 @@ pub struct AppState {
     /// `MCP_LICENSE_APP_KEY`: the gateway application key a binding's credential profile must
     /// name. Parsed once at startup, from the same [`config::AuthConfig`] the auth layer uses.
     pub license_app_key: Option<String>,
+    /// `MCP_APPROVED_RUNNER_IMAGES`: the runner image digests a `kata_python` tool may name.
+    pub approved_runner_images: Vec<String>,
 }
 
 /// Document-level OpenAPI metadata. `info` (title, version, description) comes from
@@ -42,7 +44,8 @@ pub struct AppState {
         (name = "health", description = "Liveness"),
         (name = "tools", description = "Tenant tool catalog"),
         (name = "toolkits", description = "Tenant toolkits"),
-        (name = "bindings", description = "Tenant bindings")
+        (name = "bindings", description = "Tenant bindings"),
+        (name = "available", description = "Live catalog projection")
     ),
     components(schemas(routes::tools::ValidationError))
 )]
@@ -75,6 +78,8 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::bindings::update_binding))
         .routes(routes!(routes::bindings::rotate_binding))
         .routes(routes!(routes::bindings::revoke_binding))
+        .routes(routes!(routes::available::available_tools))
+        .routes(routes!(routes::available::effective_tools))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.

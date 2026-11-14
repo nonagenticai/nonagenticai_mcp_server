@@ -32,6 +32,7 @@ fn state() -> AppState {
         pool,
         execution_enabled: false,
         license_app_key: None,
+        approved_runner_images: Vec::new(),
     }
 }
 

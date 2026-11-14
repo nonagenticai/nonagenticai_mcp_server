@@ -34,6 +34,9 @@ pub struct Config {
     pub platform_tenant_id: Rfc4122Uuid,
     /// `CATALOG_PAGE_SIZE` (optional, default 10, 1 to 100): the management catalog page bound.
     pub catalog_page_size: u32,
+    /// `MCP_APPROVED_RUNNER_IMAGES` (optional, comma-separated, default empty): the runner
+    /// image digests a `kata_python` tool may name. A tool with any other digest is refused.
+    pub approved_runner_images: Vec<String>,
     /// The `MCP_MAX_PACKAGE_*` bounds a submitted tool package is validated against.
     pub packages: PackageLimits,
 }
@@ -81,6 +84,7 @@ impl Config {
             execution_enabled,
             platform_tenant_id,
             catalog_page_size,
+            approved_runner_images: comma_list(get("MCP_APPROVED_RUNNER_IMAGES")),
             packages: PackageLimits::from_lookup(get)?,
         })
     }
@@ -298,6 +302,19 @@ fn checked_authority_url(value: &str, allow_http: bool) -> Result<(), ConfigErro
     Ok(())
 }
 
+/// A comma-separated list: surrounding whitespace is trimmed and empty entries are dropped.
+fn comma_list(raw: Option<String>) -> Vec<String> {
+    raw.map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 fn tenant_ids(raw: Option<String>) -> Result<Vec<Rfc4122Uuid>, ConfigError> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
@@ -491,6 +508,25 @@ mod tests {
         assert_eq!(configured.max_package_files, 2);
         assert_eq!(configured.max_package_file_bytes, 10);
         assert_eq!(configured.max_package_bytes, 20);
+    }
+
+    #[test]
+    fn approved_runner_images_default_empty_and_parse_a_comma_separated_list() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        assert!(cfg(&base).unwrap().approved_runner_images.is_empty());
+
+        let mut pairs = base.to_vec();
+        pairs.push((
+            "MCP_APPROVED_RUNNER_IMAGES",
+            "registry.example/runner@sha256:aaa, registry.example/other@sha256:bbb ,",
+        ));
+        assert_eq!(
+            cfg(&pairs).unwrap().approved_runner_images,
+            vec![
+                "registry.example/runner@sha256:aaa".to_owned(),
+                "registry.example/other@sha256:bbb".to_owned(),
+            ]
+        );
     }
 
     #[test]

@@ -183,6 +183,7 @@ impl Fixture {
                 pool: self.pool.clone(),
                 execution_enabled: false,
                 license_app_key: Some("synthetic".to_owned()),
+                approved_runner_images: Vec::new(),
             },
             auth(),
         )
