@@ -143,11 +143,33 @@ ACTOR_CASES = [
     {"name": "not_mapping", "params": {"_meta": {ACTOR_META: ["x"]}}},
 ]
 
+def elicitation(message, change_summary=None):
+    """The reference's ``elicitation/create`` request payload (fr.py:119-138)."""
+    text = message + ("\n\n" + change_summary if change_summary else "")
+    return {
+        "method": "elicitation/create",
+        "params": {
+            "message": text,
+            "requestedSchema": {
+                "type": "object",
+                "required": ["decision"],
+                "properties": {
+                    "decision": {"type": "string", "enum": ["approved", "rejected"]},
+                    "reason": {"type": "string"},
+                    "comment": {"type": "string"},
+                },
+            },
+        },
+    }
+
+
 OPEN_INPUTS = [
-    dict(input_key="k1", state="open", request={"kind": "approval"}, created_at=NOW),
-    dict(input_key="k2", state="open", request={"kind": "approval"},
+    dict(input_key="k1", state="open",
+         request=elicitation("approve the start?", "2 files changed"), created_at=NOW),
+    dict(input_key="k2", state="open",
+         request=elicitation("approve the start?"),
          created_at=NOW, expires_at=NOW - timedelta(seconds=1)),
-    dict(input_key="k3", state="answered", request={}, created_at=NOW,
+    dict(input_key="k3", state="answered", request=elicitation("closed"), created_at=NOW,
          answered_at=NOW + timedelta(seconds=5)),
 ]
 
