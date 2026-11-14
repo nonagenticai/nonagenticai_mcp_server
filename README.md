@@ -96,7 +96,14 @@ The code in this repository is Apache-2.0 and needs no licence key to build, tes
 It contains no licence-enforcement code today: the executable-catalog port is early and has
 not carried over the licence introspection of the Python implementation it replaces (archived
 at [`nonagenticai/nonagenticai_mcp_server-python-archive`](https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive)).
-Nothing in this repository requires a licence server.
+The server trusts the `X-Tenant-Id` header the trusted edge injects (see `src/tenant.rs`) and
+never calls a licensing service, so a clone with no licence infrastructure behaves exactly like
+the deployed instance.
+
+The platform's licence gate is optional and lives in two separate public repositories —
+[`licenses`](https://github.com/nonagenticai/licenses) (entitlements, plans and tokens) and
+[`license-authz`](https://github.com/nonagenticai/license-authz) (the Envoy `ext_authz`
+enforcement point). Nothing in this repository requires either of them.
 
 ## Licence
 
