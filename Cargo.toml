@@ -36,7 +36,11 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+# `preserve_order` is load-bearing: the worker compares its re-serialisation of a run's
+# manifest with the canonical JSON the Python API wrote at admission. A plain BTreeMap sorts
+# nested `input_schema`/`result_schema` keys, so the two strings never match and every bound
+# run fails preflight. The canonical hashes sort explicitly (`execution::canonical_json`).
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
 # Binding expiry is a timezone-aware RFC 3339 instant (`BindingSpec.expires_at`).
 chrono = { version = "=0.4.45", features = ["serde"] }
 # The licence authority is an HTTP boundary: authentication introspects the caller's opaque

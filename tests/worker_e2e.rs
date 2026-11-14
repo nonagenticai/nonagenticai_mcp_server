@@ -397,6 +397,21 @@ impl Harness {
         });
         let manifest: ToolManifest = serde_json::from_value(value).expect("kata manifest");
         binding_fixture_with_tools(&fixture, std::slice::from_ref(&manifest)).await;
+        // The run's authority snapshot is built from the same JSONB form the resolver reads
+        // back, exactly as the Python API's admission does; a struct re-serialized from the
+        // in-memory manifest can carry a different key order.
+        let stored: serde_json::Value = sqlx::query_scalar(
+            "SELECT manifest FROM public.mcp_tool_versions \
+             WHERE tenant_id=$1::uuid AND tool_id=$2::uuid AND version=$3",
+        )
+        .bind(manifest.tenant_id.as_str())
+        .bind(manifest.tool_id.as_str())
+        .bind(i32::try_from(manifest.version.get()).expect("version"))
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("stored manifest");
+        let manifest: ToolManifest =
+            serde_json::from_value(stored).expect("the stored manifest parses");
         seed_source(&fixture.pool, &base_url).await;
         // The service is platform-owned and the run's tenant may use it.
         sqlx::query(
