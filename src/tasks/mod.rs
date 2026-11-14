@@ -259,7 +259,7 @@ fn attach_meta(mut fields: Map<String, Value>, fr_meta: Option<&Value>) -> Value
 
 /// `json.dumps(envelope, ensure_ascii=False, allow_nan=False)` in the reference's key order —
 /// the text a client reads, byte for byte.
-fn envelope_text(body: &Value) -> String {
+pub(crate) fn envelope_text(body: &Value) -> String {
     let mut out = String::from("{\"run_id\": ");
     out.push_str(&python_json(&body["run_id"]));
     out.push_str(", \"status\": ");
@@ -321,7 +321,7 @@ fn python_json(value: &Value) -> String {
 
 /// Python's `datetime.isoformat()` for a UTC instant: a `+00:00` offset and six fractional
 /// digits only when the instant carries sub-second precision.
-fn iso8601(at: DateTime<Utc>) -> String {
+pub(crate) fn iso8601(at: DateTime<Utc>) -> String {
     let format = if at.timestamp_subsec_micros() == 0 {
         SecondsFormat::Secs
     } else {

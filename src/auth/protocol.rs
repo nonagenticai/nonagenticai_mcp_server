@@ -96,12 +96,11 @@ pub async fn protect(State(auth): State<Auth>, mut request: Request, next: Next)
 }
 
 async fn authorize(auth: &Auth, headers: &HeaderMap, path: &str) -> Result<Principal, AuthError> {
-    // Operators may reach the whole runs surface with their key: the collection POST is then
-    // refused by the route itself (`403 forbidden`, the reference's `PermissionError`), not by
-    // the middleware, so a management caller sees 403 rather than 401.
-    let operator_runs = (path == "/mcp/runs" || path.starts_with("/mcp/runs/"))
-        && headers.contains_key("x-mcp-admin-key");
-    let management = is_management(path) || operator_runs;
+    // Exactly the reference's rule (`src/auth/protocol.py:382-384`): an operator key raises a
+    // single run's path to management, but the collection POST `/mcp/runs` stays binding-auth,
+    // so a management-shaped submission there is refused before admission, not at the handler.
+    let management = is_management(path)
+        || (path.starts_with("/mcp/runs/") && headers.contains_key("x-mcp-admin-key"));
 
     let mut gateway = header(headers, "x-tenant-id", 4103)?;
     if !management && !gateway.as_deref().is_some_and(|v| v.starts_with("Bearer ")) {

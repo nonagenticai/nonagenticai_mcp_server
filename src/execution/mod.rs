@@ -201,11 +201,16 @@ pub fn value_hash(value: &Value) -> String {
 
 /// The authority snapshot stored on `mcp_runs.authority`: the resolved manifest, its effective
 /// selection entry and the binding's bound context, exactly as the resolver produced them.
+///
+/// Each member is a JSON **string** holding that model's own JSON, not a nested object: the
+/// reference stores `ResolvedTool.manifest_json/effective_json/context_json` (`str`), and the
+/// worker reads them with `ToolManifest.model_validate_json(...)`, which rejects an object.
+/// A nested object here would let the Rust API accept a run the Python worker can never claim.
 pub fn authority_snapshot(resolved: &ResolvedTool) -> Result<Value, serde_json::Error> {
     Ok(json!({
-        "manifest": serde_json::to_value(&resolved.manifest)?,
-        "effective": serde_json::to_value(&resolved.effective)?,
-        "context": serde_json::to_value(&resolved.context)?,
+        "manifest": serde_json::to_string(&resolved.manifest)?,
+        "effective": serde_json::to_string(&resolved.effective)?,
+        "context": serde_json::to_string(&resolved.context)?,
     }))
 }
 

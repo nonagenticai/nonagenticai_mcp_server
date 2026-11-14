@@ -23,7 +23,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::header::{CACHE_CONTROL, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::SecondsFormat;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -291,8 +290,9 @@ pub async fn run_events(
             json!({
                 "event_id": event.event_id,
                 "kind": event.kind.as_str(),
-                // FastAPI encodes the stored instant the way Python's `isoformat` does.
-                "created_at": event.created_at.to_rfc3339_opts(SecondsFormat::Micros, false),
+                // FastAPI encodes the stored instant the way Python's `isoformat` does: a
+                // zero fraction is omitted.
+                "created_at": crate::tasks::iso8601(event.created_at),
             })
         })
         .collect();

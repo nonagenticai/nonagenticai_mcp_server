@@ -196,6 +196,21 @@ async fn accept_writes_the_queued_run_snapshot_authority_and_event() {
         run.authority,
         authority_snapshot(&bound.resolved).expect("authority snapshot")
     );
+    // The reference stores each member as its model's JSON *string*; the Python worker parses
+    // them with `model_validate_json`, which refuses an object.
+    for member in ["manifest", "effective", "context"] {
+        assert!(
+            run.authority[member].is_string(),
+            "authority.{member} must be a JSON string: {}",
+            run.authority
+        );
+        serde_json::from_str::<Value>(
+            run.authority[member]
+                .as_str()
+                .expect("a JSON string member"),
+        )
+        .expect("the member is itself valid JSON");
+    }
     assert_eq!(run.created_by, attribution(&bound.principal));
     assert_eq!(run.actor, Some(actor));
     assert_eq!(run.idempotency_key.as_deref(), Some("accept-key"));

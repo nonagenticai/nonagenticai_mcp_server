@@ -309,9 +309,9 @@ async fn a_kata_run_returns_the_terminal_row_within_the_sync_wait() {
 
 #[tokio::test]
 async fn a_management_caller_cannot_submit() {
-    // An operator key authenticates on the whole runs surface, as in the reference; the
-    // collection POST then refuses a management caller at the route (`403 forbidden`), which
-    // is the reference's `PermissionError`, not a 401 from the middleware.
+    // The reference raises only `/mcp/runs/<id>` to management when an operator key is present;
+    // the collection POST stays binding-auth, so an operator-shaped submission is refused
+    // before admission (the route's 403 guard is unreachable over HTTP, exactly as there).
     let bound = bound(
         &[tool_manifest("alpha_tool", TOOL_ALPHA)],
         ExecutionSettings::default(),
@@ -329,8 +329,7 @@ async fn a_management_caller_cannot_submit() {
         ))
         .expect("request");
     let (status, _, body) = send(&bound.app, request).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body, json!({"error": "forbidden"}));
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     bound.fixture.finish().await;
 }
 

@@ -220,16 +220,19 @@ EFFECTIVE = EffectiveTool(
     public_name="synthetic_tool",
 )
 CONTEXT = BoundContext(tenant_id=TENANT_A)
+# The reference stores each member as that model's own JSON STRING
+# (`ResolvedTool.manifest_json` is `str`; readers call `model_validate_json`), so the
+# fixture pins the type as well as the bytes.
 AUTHORITY_CASES = [
     {"name": name,
-     "manifest": j(manifest.model_dump(mode="json")),
-     "effective": j(EFFECTIVE.model_dump(mode="json")),
-     "context": j(CONTEXT.model_dump(mode="json")),
-     "expected": {k: j(v) for k, v in {
-         "manifest": manifest.model_dump(mode="json"),
-         "effective": EFFECTIVE.model_dump(mode="json"),
-         "context": CONTEXT.model_dump(mode="json"),
-     }.items()}}
+     "manifest": manifest.model_dump_json(),
+     "effective": EFFECTIVE.model_dump_json(),
+     "context": CONTEXT.model_dump_json(),
+     "expected": {
+         "manifest": manifest.model_dump_json(),
+         "effective": EFFECTIVE.model_dump_json(),
+         "context": CONTEXT.model_dump_json(),
+     }}
     for name, manifest in MANIFESTS
 ]
 

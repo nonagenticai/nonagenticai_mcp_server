@@ -145,11 +145,17 @@ async fn a_call_returns_the_run_envelope_in_text_and_structured_content() {
     .expect("the run is durable");
     assert_eq!(stored.as_deref(), Some(run_id), "{reply}");
 
-    // The text is exactly the serialised envelope.
-    assert_eq!(
-        serde_json::to_string(&envelope).expect("json"),
-        text_of(&reply),
-        "{reply}"
+    // The text is the reference's `json.dumps(envelope)`: its separator layout (", ", ": ")
+    // in its key order, not serde's compact form. `envelope_of` above already proved the text
+    // parses to the same value as `structuredContent`.
+    let text = text_of(&reply);
+    assert!(
+        text.starts_with(r#"{"run_id": ""#),
+        "the reference's key order and spacing: {text}"
+    );
+    assert!(
+        text.contains(r#"", "status": ""#) && text.contains(r#"", "result": "#),
+        "the reference's separators: {text}"
     );
     bound.fixture.finish().await;
 }

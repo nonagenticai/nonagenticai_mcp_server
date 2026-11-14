@@ -152,20 +152,43 @@ fn authority_matches_the_oracle() {
     let cases = cases(&oracle, "authority");
     assert_eq!(cases.len(), 2, "the oracle's authority cases");
     for case in cases {
+        // The reference stores each member as that model's own JSON *string*; the fixture keeps
+        // the same shape, so the oracle pins the type as well as the content.
         let resolved = ResolvedTool {
-            manifest: serde_json::from_value::<ToolManifest>(case["manifest"].clone())
-                .expect("a manifest"),
-            effective: serde_json::from_value::<EffectiveTool>(case["effective"].clone())
-                .expect("an effective selection entry"),
-            context: serde_json::from_value::<BoundContext>(case["context"].clone())
-                .expect("a bound context"),
+            manifest: serde_json::from_str::<ToolManifest>(
+                case["manifest"]
+                    .as_str()
+                    .expect("the manifest is a JSON string"),
+            )
+            .expect("a manifest"),
+            effective: serde_json::from_str::<EffectiveTool>(
+                case["effective"]
+                    .as_str()
+                    .expect("the selection entry is a JSON string"),
+            )
+            .expect("an effective selection entry"),
+            context: serde_json::from_str::<BoundContext>(
+                case["context"]
+                    .as_str()
+                    .expect("the context is a JSON string"),
+            )
+            .expect("a bound context"),
         };
-        assert_eq!(
-            &authority_snapshot(&resolved).expect("a serializable snapshot"),
-            &case["expected"],
-            "authority {}",
-            name(case)
-        );
+        let snapshot = authority_snapshot(&resolved).expect("a serializable snapshot");
+        for member in ["manifest", "effective", "context"] {
+            // The stored member must be a JSON *string* (the worker calls
+            // `model_validate_json`). Its content is compared as parsed JSON: object key order
+            // is not part of the contract, and this crate's serde map sorts keys.
+            let actual = snapshot[member]
+                .as_str()
+                .unwrap_or_else(|| panic!("authority {member} of {} is a string", name(case)));
+            let expected = case["expected"][member]
+                .as_str()
+                .expect("the oracle member is a JSON string");
+            let actual: Value = serde_json::from_str(actual).expect("valid JSON");
+            let expected: Value = serde_json::from_str(expected).expect("valid JSON");
+            assert_eq!(actual, expected, "authority {member} of {}", name(case));
+        }
     }
 }
 
