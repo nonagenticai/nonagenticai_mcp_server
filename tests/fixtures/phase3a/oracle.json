@@ -1,0 +1,1290 @@
+{
+  "source": "nonagenticai_mcp_server-python-archive",
+  "pin": "22ac1ce4d1b8129a543832b8ed86fe0e1c0c7fe4",
+  "generated_from": "pure functions only (no DB, no server)",
+  "settings": {
+    "execution_retention_days": 7,
+    "task_poll_interval_ms": 2000,
+    "external_poll_seconds": 5
+  },
+  "value_hash": [
+    {
+      "name": "empty_object",
+      "value": {},
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "nested",
+      "value": {
+        "b": [
+          1,
+          2,
+          {
+            "z": null,
+            "a": true
+          }
+        ],
+        "a": {
+          "y": "x"
+        }
+      },
+      "sha256": "8d41f7211db75ecb584a8f563d95278f00039218da19284d96810f8b471e335d"
+    },
+    {
+      "name": "unicode",
+      "value": {
+        "name": "café ☕",
+        "emoji": "🙂",
+        "rtl": "مرحبا"
+      },
+      "sha256": "349583ccea4c1460b1beb065f9461e0ba2e33fde0f89d21ca0cd73e64c6e3863"
+    },
+    {
+      "name": "strings_escapes",
+      "value": {
+        "control": "\u0000\u001f",
+        "quote": "a\"b\\c",
+        "nl": "a\nb\tt"
+      },
+      "sha256": "8aa9fb533eace8366141530c64acce50048366430c26e4808760f88032597e75"
+    },
+    {
+      "name": "floats",
+      "value": {
+        "a": 1.0,
+        "b": 1.5,
+        "c": 0.1,
+        "d": -2.5
+      },
+      "sha256": "eb810eb005aa7c023bacaf8e60b8551e571b5a0f634a38f69dfd9dbcc4d2bd90"
+    },
+    {
+      "name": "float_exp",
+      "value": {
+        "big": 1e+20,
+        "small": 1e-07,
+        "neg": -3.5e-09
+      },
+      "sha256": "06e16d213ff438b92b7e59f7e7b181a2eba55f901dc2b1bbc8eba37d92ddfdff"
+    },
+    {
+      "name": "float_bounds",
+      "value": {
+        "e15": 1000000000000000.0,
+        "e16": 1e+16,
+        "e_neg4": 0.0001,
+        "e_neg5": 1e-05,
+        "max": 1.7976931348623157e+308,
+        "min_sub": 5e-324,
+        "frac": 1.2345678901234568e+17
+      },
+      "sha256": "2d3ec873c096828a9c32b652e63520e66228c74b205de4ed9728d8897f6e6e9d"
+    },
+    {
+      "name": "unicode_edges",
+      "value": {
+        "sep": "  ",
+        "del": "",
+        "nul": "\u0000",
+        "astral": "🙂",
+        "combining": "é"
+      },
+      "sha256": "9d5a7a98d15473fbfccac35e77cfcb2384279e6a0fa9cb33bb014776a51b9287"
+    },
+    {
+      "name": "bools_null",
+      "value": {
+        "t": true,
+        "f": false,
+        "n": null
+      },
+      "sha256": "22e00dc2f7b01420f940fbdbfbdf34fa0667cc6500186495023ba37722cbd05e"
+    },
+    {
+      "name": "ints",
+      "value": {
+        "zero": 0,
+        "neg": -42,
+        "big": 9223372036854775807,
+        "u64": 18446744073709551615
+      },
+      "sha256": "e97a070ba679948c8aaacdab45feeb15bed7bb9a0a42071c5a25a925ac2ee433"
+    },
+    {
+      "name": "mixed",
+      "value": {
+        "a": [],
+        "b": {},
+        "c": [
+          null,
+          false,
+          0,
+          "",
+          {}
+        ],
+        "d": {
+          "": "empty-key"
+        }
+      },
+      "sha256": "2877e80394da4d799176d0173f7c03ba432bf311d65acc14c224ce41323b6b63"
+    },
+    {
+      "name": "zeros",
+      "value": {
+        "neg_zero_float": -0.0,
+        "zero": 0
+      },
+      "sha256": "d59042364c80d9e4df19f18f9476dcc8c1219b5b1b5926f32486bd72d8f11b34"
+    }
+  ],
+  "envelope": [
+    {
+      "name": "queued",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "queued",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "expected": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "queued",
+        "result": null,
+        "error": null,
+        "payload_expired": false
+      }
+    },
+    {
+      "name": "succeeded",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "succeeded",
+        "result": {
+          "ok": true
+        },
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "expected": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "succeeded",
+        "result": {
+          "ok": true
+        },
+        "error": null,
+        "payload_expired": false
+      }
+    },
+    {
+      "name": "failed",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "failed",
+        "result": null,
+        "error": {
+          "code": "preflight_failed",
+          "message": "denied"
+        },
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "expected": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "failed",
+        "result": null,
+        "error": {
+          "code": "preflight_failed",
+          "message": "denied"
+        },
+        "payload_expired": false
+      }
+    },
+    {
+      "name": "expired",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "succeeded",
+        "result": {},
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": "2026-11-21T12:00:00+00:00",
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "expected": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "succeeded",
+        "result": {},
+        "error": null,
+        "payload_expired": true
+      }
+    }
+  ],
+  "actor": [
+    {
+      "name": "valid_full",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": "agent://job/1",
+            "job": "018f0000-0000-7000-8000-00000000dddd",
+            "on_behalf_of": "customer-7"
+          }
+        }
+      },
+      "expected": {
+        "channel": "mcp",
+        "address": "agent://job/1",
+        "job": "018f0000-0000-7000-8000-00000000dddd",
+        "on_behalf_of": "customer-7"
+      }
+    },
+    {
+      "name": "valid_minimal",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": "agent://x"
+          }
+        }
+      },
+      "expected": {
+        "channel": "mcp",
+        "address": "agent://x"
+      }
+    },
+    {
+      "name": "unknown_keys_dropped",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": "agent://x",
+            "extra": 1
+          }
+        }
+      },
+      "expected": {
+        "channel": "mcp",
+        "address": "agent://x"
+      }
+    },
+    {
+      "name": "absent",
+      "params": {
+        "name": "t",
+        "arguments": {}
+      },
+      "expected": null
+    },
+    {
+      "name": "wrong_channel",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "web",
+            "address": "agent://x"
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "empty_address",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": ""
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "long_address",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "bad_job",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": "agent://x",
+            "job": "not-a-uuid"
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "bad_on_behalf",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": {
+            "channel": "mcp",
+            "address": "agent://x",
+            "on_behalf_of": 7
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "not_mapping",
+      "params": {
+        "_meta": {
+          "ai.nonagentic/actor": [
+            "x"
+          ]
+        }
+      },
+      "expected": null
+    }
+  ],
+  "task_view": [
+    {
+      "name": "queued",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "queued",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [],
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "working",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000,
+        "resultType": "complete"
+      }
+    },
+    {
+      "name": "running_open_input",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "status_message": "waiting",
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": "2026-11-14T12:00:00+00:00",
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [
+        {
+          "input_key": "k1",
+          "state": "open",
+          "request": {
+            "kind": "approval"
+          },
+          "created_at": "2026-11-14T12:00:00+00:00"
+        },
+        {
+          "input_key": "k2",
+          "state": "open",
+          "request": {
+            "kind": "approval"
+          },
+          "created_at": "2026-11-14T12:00:00+00:00",
+          "expires_at": "2026-11-14T11:59:59+00:00"
+        },
+        {
+          "input_key": "k3",
+          "state": "answered",
+          "request": {},
+          "created_at": "2026-11-14T12:00:00+00:00",
+          "answered_at": "2026-11-14T12:00:05+00:00"
+        }
+      ],
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "input_required",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:05+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000,
+        "statusMessage": "waiting",
+        "resultType": "complete",
+        "inputRequests": {
+          "k1": {
+            "kind": "approval"
+          },
+          "k2": {
+            "kind": "approval"
+          }
+        }
+      }
+    },
+    {
+      "name": "cancelling",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "cancelling",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [],
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "working",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000,
+        "resultType": "complete"
+      }
+    },
+    {
+      "name": "cancelled",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "cancelled",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": "2026-11-14T12:00:00+00:00",
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [],
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "cancelled",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000,
+        "resultType": "complete"
+      }
+    },
+    {
+      "name": "succeeded",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "succeeded",
+        "result": {
+          "ok": true
+        },
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": "2026-11-14T12:00:00+00:00",
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [],
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "completed",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000,
+        "resultType": "complete",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"run_id\": \"018f0000-0000-7000-8000-00000000aaaa\", \"status\": \"succeeded\", \"result\": {\"ok\": true}, \"error\": null, \"payload_expired\": false}"
+            }
+          ],
+          "structuredContent": {
+            "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+            "status": "succeeded",
+            "result": {
+              "ok": true
+            },
+            "error": null,
+            "payload_expired": false
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "name": "failed_is_completed",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "failed",
+        "result": null,
+        "error": {
+          "code": "timeout",
+          "message": "x"
+        },
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": "2026-11-14T12:00:00+00:00",
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [],
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "completed",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000,
+        "resultType": "complete",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"run_id\": \"018f0000-0000-7000-8000-00000000aaaa\", \"status\": \"failed\", \"result\": null, \"error\": {\"code\": \"timeout\", \"message\": \"x\"}, \"payload_expired\": false}"
+            }
+          ],
+          "structuredContent": {
+            "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+            "status": "failed",
+            "result": null,
+            "error": {
+              "code": "timeout",
+              "message": "x"
+            },
+            "payload_expired": false
+          },
+          "isError": true
+        }
+      }
+    },
+    {
+      "name": "fr_project",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "fr_project",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": {
+          "project_id": "p-1"
+        },
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "inputs": [],
+      "fr_meta": {
+        "project_id": "p-1",
+        "activity": [],
+        "signals": []
+      },
+      "expected": {
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "working",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 5000,
+        "_meta": {
+          "ai.nonagentic/fr": {
+            "project_id": "p-1",
+            "activity": [],
+            "signals": []
+          }
+        },
+        "resultType": "complete"
+      }
+    }
+  ],
+  "create_task_result": [
+    {
+      "name": "queued",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "kata_python",
+        "status": "queued",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": null,
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "expected": {
+        "resultType": "task",
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "working",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 2000
+      }
+    },
+    {
+      "name": "fr",
+      "row": {
+        "run_id": "018f0000-0000-7000-8000-00000000aaaa",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "binding_id": "018f0000-0000-7000-8000-00000000bbbb",
+        "gateway_license_id": "018f0000-0000-7000-8000-00000000cccc",
+        "owner_tenant_id": "10000000-0000-7000-8000-000000000001",
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tool_version": 1,
+        "runtime": "fr_project",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "status_message": null,
+        "payload_expired_at": null,
+        "external_ref": {
+          "project_id": "p-1"
+        },
+        "created_at": "2026-11-14T12:00:00+00:00",
+        "started_at": null,
+        "finished_at": null,
+        "cancel_requested": false,
+        "idempotency_key": null,
+        "input_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "inputs": {
+          "a": 1
+        },
+        "authority": {},
+        "profile_snapshot": {},
+        "actor": {
+          "subject": "synthetic-subject",
+          "license_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "queue_deadline": "2026-11-14T12:01:00+00:00",
+        "created_by": {},
+        "mode": "bound"
+      },
+      "fr_meta": {
+        "project_id": "p-1",
+        "activity": [],
+        "signals": []
+      },
+      "expected": {
+        "resultType": "task",
+        "taskId": "018f0000-0000-7000-8000-00000000aaaa",
+        "status": "working",
+        "createdAt": "2026-11-14T12:00:00+00:00",
+        "lastUpdatedAt": "2026-11-14T12:00:00+00:00",
+        "ttlMs": 604800000,
+        "pollIntervalMs": 5000,
+        "_meta": {
+          "ai.nonagentic/fr": {
+            "project_id": "p-1",
+            "activity": [],
+            "signals": []
+          }
+        }
+      }
+    }
+  ],
+  "authority": [
+    {
+      "name": "kata",
+      "manifest": {
+        "schema_version": 1,
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "version": 1,
+        "public_name": "synthetic_tool",
+        "operation": "synthetic.synthetic_tool",
+        "description": "Synthetic fixture",
+        "runtime": "kata_python",
+        "target": null,
+        "entrypoint": "package.main:run",
+        "input_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "context_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "package_sha256": "7781c2b487d8bde6941ae9b769fde3635666ff51190802907376739cde93a0bd",
+        "runner_image_digest": "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "allowed_operations": [],
+        "operation_constraints": [],
+        "limits": {
+          "wall_seconds": 60,
+          "queue_seconds": 60,
+          "memory_mi": 256,
+          "cpu_millicores": 250,
+          "api_calls": 10,
+          "frame_bytes": 65536,
+          "output_bytes": 262144
+        },
+        "effect": "read_only"
+      },
+      "effective": {
+        "tool": {
+          "id": "20000000-0000-7000-8000-000000000001",
+          "version": 1,
+          "tenant_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "operation_constraints": [],
+        "limits": {
+          "wall_seconds": 60,
+          "queue_seconds": 30,
+          "memory_mi": 256,
+          "cpu_millicores": 250,
+          "api_calls": 10,
+          "frame_bytes": 65536,
+          "output_bytes": 262144
+        },
+        "public_name": "synthetic_tool"
+      },
+      "context": {
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "project_id": null,
+        "workspace_id": null,
+        "project_phase": null,
+        "work_type": null,
+        "card_stage": null,
+        "responsibility": null,
+        "test_command": null,
+        "reviewed_commit": null
+      },
+      "expected": {
+        "manifest": {
+          "schema_version": 1,
+          "tool_id": "20000000-0000-7000-8000-000000000001",
+          "tenant_id": "10000000-0000-7000-8000-000000000001",
+          "version": 1,
+          "public_name": "synthetic_tool",
+          "operation": "synthetic.synthetic_tool",
+          "description": "Synthetic fixture",
+          "runtime": "kata_python",
+          "target": null,
+          "entrypoint": "package.main:run",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "context_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "package_sha256": "7781c2b487d8bde6941ae9b769fde3635666ff51190802907376739cde93a0bd",
+          "runner_image_digest": "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "allowed_operations": [],
+          "operation_constraints": [],
+          "limits": {
+            "wall_seconds": 60,
+            "queue_seconds": 60,
+            "memory_mi": 256,
+            "cpu_millicores": 250,
+            "api_calls": 10,
+            "frame_bytes": 65536,
+            "output_bytes": 262144
+          },
+          "effect": "read_only"
+        },
+        "effective": {
+          "tool": {
+            "id": "20000000-0000-7000-8000-000000000001",
+            "version": 1,
+            "tenant_id": "10000000-0000-7000-8000-000000000001"
+          },
+          "operation_constraints": [],
+          "limits": {
+            "wall_seconds": 60,
+            "queue_seconds": 30,
+            "memory_mi": 256,
+            "cpu_millicores": 250,
+            "api_calls": 10,
+            "frame_bytes": 65536,
+            "output_bytes": 262144
+          },
+          "public_name": "synthetic_tool"
+        },
+        "context": {
+          "tenant_id": "10000000-0000-7000-8000-000000000001",
+          "project_id": null,
+          "workspace_id": null,
+          "project_phase": null,
+          "work_type": null,
+          "card_stage": null,
+          "responsibility": null,
+          "test_command": null,
+          "reviewed_commit": null
+        }
+      }
+    },
+    {
+      "name": "external",
+      "manifest": {
+        "schema_version": 1,
+        "tool_id": "20000000-0000-7000-8000-000000000001",
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "version": 1,
+        "public_name": "synthetic_tool",
+        "operation": "synthetic.synthetic_tool",
+        "description": "Synthetic fixture",
+        "runtime": "n8n_workflow",
+        "target": {
+          "kind": "n8n_workflow",
+          "webhook_path": "mcp/demo",
+          "result_node": "MCP Result"
+        },
+        "entrypoint": null,
+        "input_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "result_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "context_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "package_sha256": "7781c2b487d8bde6941ae9b769fde3635666ff51190802907376739cde93a0bd",
+        "runner_image_digest": null,
+        "allowed_operations": [],
+        "operation_constraints": [],
+        "limits": {
+          "wall_seconds": 60,
+          "queue_seconds": 60,
+          "memory_mi": 256,
+          "cpu_millicores": 250,
+          "api_calls": 10,
+          "frame_bytes": 65536,
+          "output_bytes": 262144
+        },
+        "effect": "read_only"
+      },
+      "effective": {
+        "tool": {
+          "id": "20000000-0000-7000-8000-000000000001",
+          "version": 1,
+          "tenant_id": "10000000-0000-7000-8000-000000000001"
+        },
+        "operation_constraints": [],
+        "limits": {
+          "wall_seconds": 60,
+          "queue_seconds": 30,
+          "memory_mi": 256,
+          "cpu_millicores": 250,
+          "api_calls": 10,
+          "frame_bytes": 65536,
+          "output_bytes": 262144
+        },
+        "public_name": "synthetic_tool"
+      },
+      "context": {
+        "tenant_id": "10000000-0000-7000-8000-000000000001",
+        "project_id": null,
+        "workspace_id": null,
+        "project_phase": null,
+        "work_type": null,
+        "card_stage": null,
+        "responsibility": null,
+        "test_command": null,
+        "reviewed_commit": null
+      },
+      "expected": {
+        "manifest": {
+          "schema_version": 1,
+          "tool_id": "20000000-0000-7000-8000-000000000001",
+          "tenant_id": "10000000-0000-7000-8000-000000000001",
+          "version": 1,
+          "public_name": "synthetic_tool",
+          "operation": "synthetic.synthetic_tool",
+          "description": "Synthetic fixture",
+          "runtime": "n8n_workflow",
+          "target": {
+            "kind": "n8n_workflow",
+            "webhook_path": "mcp/demo",
+            "result_node": "MCP Result"
+          },
+          "entrypoint": null,
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "context_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "package_sha256": "7781c2b487d8bde6941ae9b769fde3635666ff51190802907376739cde93a0bd",
+          "runner_image_digest": null,
+          "allowed_operations": [],
+          "operation_constraints": [],
+          "limits": {
+            "wall_seconds": 60,
+            "queue_seconds": 60,
+            "memory_mi": 256,
+            "cpu_millicores": 250,
+            "api_calls": 10,
+            "frame_bytes": 65536,
+            "output_bytes": 262144
+          },
+          "effect": "read_only"
+        },
+        "effective": {
+          "tool": {
+            "id": "20000000-0000-7000-8000-000000000001",
+            "version": 1,
+            "tenant_id": "10000000-0000-7000-8000-000000000001"
+          },
+          "operation_constraints": [],
+          "limits": {
+            "wall_seconds": 60,
+            "queue_seconds": 30,
+            "memory_mi": 256,
+            "cpu_millicores": 250,
+            "api_calls": 10,
+            "frame_bytes": 65536,
+            "output_bytes": 262144
+          },
+          "public_name": "synthetic_tool"
+        },
+        "context": {
+          "tenant_id": "10000000-0000-7000-8000-000000000001",
+          "project_id": null,
+          "workspace_id": null,
+          "project_phase": null,
+          "work_type": null,
+          "card_stage": null,
+          "responsibility": null,
+          "test_command": null,
+          "reviewed_commit": null
+        }
+      }
+    }
+  ]
+}
