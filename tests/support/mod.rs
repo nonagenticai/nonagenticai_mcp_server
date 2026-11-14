@@ -211,6 +211,18 @@ impl Fixture {
         self.app_with_bindings(Arc::new(PgBindingAuthority::new(self.pool.clone())))
     }
 
+    /// The same application with a different configured gateway application key: the
+    /// deployment rotated `MCP_LICENSE_APP_KEY` after its bindings were written.
+    pub fn app_with_app_key(&self, key: &str) -> Router {
+        let mut state = self.state();
+        state.license_app_key = Some(key.to_owned());
+        app_with_auth(
+            state,
+            self.auth()
+                .with_bindings(Arc::new(PgBindingAuthority::new(self.pool.clone()))),
+        )
+    }
+
     pub fn app_with_bindings(&self, bindings: Arc<dyn BindingAuthority>) -> Router {
         app_with_auth(self.state(), self.auth().with_bindings(bindings))
     }

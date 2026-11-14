@@ -69,6 +69,11 @@ pub enum CatalogResolverError {
     /// The reference's `CatalogConflictError`: the catalog moved twice during one resolution.
     #[error("{0}")]
     Conflict(&'static str),
+    /// The reference's `ValueError`: the stored credential profile no longer names the
+    /// configured gateway application. Its ASGI handler answers 422, so this never collapses
+    /// into the conflict path.
+    #[error("{0}")]
+    Invalid(&'static str),
     /// A missing generation row, a missing manifest or a failed statement.
     #[error(transparent)]
     Store(CatalogStoreError),
@@ -93,13 +98,12 @@ impl From<ToolkitServiceError> for CatalogResolverError {
     fn from(error: ToolkitServiceError) -> Self {
         match error {
             ToolkitServiceError::Forbidden(message) => Self::Forbidden(message),
-            ToolkitServiceError::Conflict(message) => Self::Conflict(message),
             // The reference raises `CatalogConflictError` when the effective selection no
-            // longer matches. A profile that no longer validates cannot reach this path in
-            // production (the same spec was validated when the binding was written), so the
-            // request-level `ValueError` is treated as the same catalog conflict: the caller
-            // gets the reference's 409, never a 422 that blames its own request.
-            ToolkitServiceError::Invalid(message) => Self::Conflict(message),
+            // longer matches.
+            ToolkitServiceError::Conflict(message) => Self::Conflict(message),
+            // The reference raises `ValueError` when the stored profile no longer validates
+            // (`validate_profile`); its exception handler answers 422, never 409.
+            ToolkitServiceError::Invalid(message) => Self::Invalid(message),
             ToolkitServiceError::Store(error) => Self::Store(error),
         }
     }

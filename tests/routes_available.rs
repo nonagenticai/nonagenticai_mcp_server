@@ -125,6 +125,30 @@ async fn a_reserved_public_name_is_unavailable() {
 }
 
 #[tokio::test]
+async fn a_profile_naming_a_rotated_gateway_key_is_invalid_request() {
+    let fixture = Fixture::new().await;
+    binding_fixture(&fixture).await;
+    let app = fixture.app();
+    let created = create_binding(&app).await;
+    let token = created["token"].as_str().expect("binding token").to_owned();
+
+    // The deployment rotated `MCP_LICENSE_APP_KEY` after the binding was written, so the
+    // stored profile no longer names the configured application. The reference's
+    // `validate_profile` raises `ValueError`, and its ASGI handler answers 422 — never the
+    // catalog's 409.
+    let rotated = fixture.app_with_app_key("rotated-gateway-app-key");
+    let (status, headers, body) = send(
+        &rotated,
+        binding_request(Method::GET, "/mcp/available-tools", &token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_no_store(&headers);
+    assert_eq!(body, json!({"error": "invalid_request"}));
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn a_kata_python_tool_outside_the_approved_images_is_unavailable() {
     let fixture = Fixture::new().await;
     // The approved list is empty in this fixture, so any runner digest must be refused.

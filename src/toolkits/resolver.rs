@@ -527,6 +527,7 @@ impl SelectionResolver {
         for entry in &flattened {
             let manifest = loaded
                 .get(&(entry.tool.id.as_str().to_owned(), entry.tool.version.get()))
+                .filter(|manifest| manifest.tenant_id == entry.tool.tenant_id)
                 .ok_or(ResolveError::NotFound("selected tool not found"))?;
             for operation in &manifest.allowed_operations {
                 if wanted_keys.insert((operation.id.as_str().to_owned(), operation.version.get())) {
@@ -542,6 +543,7 @@ impl SelectionResolver {
         for entry in flattened {
             let manifest = loaded
                 .get(&(entry.tool.id.as_str().to_owned(), entry.tool.version.get()))
+                .filter(|manifest| manifest.tenant_id == entry.tool.tenant_id)
                 .ok_or(ResolveError::NotFound("selected tool not found"))?;
             // The agent runner maps canonical operations to tools one to one.
             if !operations.insert(manifest.operation.as_str()) {

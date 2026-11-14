@@ -9,7 +9,8 @@
 //!
 //! A refusal is `{"error": <code>}` with `Cache-Control: no-store`: permission is
 //! `403 forbidden`, a missing binding `404 not_found`, a catalog conflict
-//! `409 revision_or_lifecycle_conflict` and an invalid path identity `422 invalid_request`.
+//! `409 revision_or_lifecycle_conflict` and an invalid path identity or stored row
+//! `422 invalid_request`.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -69,6 +70,7 @@ impl From<CatalogResolverError> for AvailableError {
         match error {
             CatalogResolverError::Forbidden(_) => Self::Forbidden,
             CatalogResolverError::Conflict(_) => Self::Conflict,
+            CatalogResolverError::Invalid(_) => Self::Invalid,
             CatalogResolverError::Store(error)
             | CatalogResolverError::Service(ToolkitServiceError::Store(error)) => error.into(),
             CatalogResolverError::Service(error) => error.into(),
@@ -80,7 +82,8 @@ impl From<ToolkitServiceError> for AvailableError {
     fn from(error: ToolkitServiceError) -> Self {
         match error {
             ToolkitServiceError::Forbidden(_) => Self::Forbidden,
-            ToolkitServiceError::Conflict(_) | ToolkitServiceError::Invalid(_) => Self::Conflict,
+            ToolkitServiceError::Invalid(_) => Self::Invalid,
+            ToolkitServiceError::Conflict(_) => Self::Conflict,
             ToolkitServiceError::Store(error) => error.into(),
         }
     }
@@ -91,10 +94,9 @@ impl From<CatalogStoreError> for AvailableError {
         match error {
             CatalogStoreError::NotFound(_) => Self::NotFound,
             CatalogStoreError::Conflict(_) => Self::Conflict,
-            CatalogStoreError::Corrupt(message) => {
-                tracing::error!(message, "catalog resolver corrupt row");
-                Self::Internal
-            }
+            // A stored row the model can no longer parse: the reference's ValidationError
+            // on that read, which its exception handler maps to 422.
+            CatalogStoreError::Corrupt(_) => Self::Invalid,
             CatalogStoreError::Database(error) => {
                 tracing::error!(%error, "catalog resolver database failure");
                 Self::Internal
@@ -170,4 +172,37 @@ pub(crate) fn resolver(state: &AppState) -> CatalogResolver {
         ),
         state.approved_runner_images.clone(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stored row the model can no longer parse is the reference's `ValidationError` on that
+    /// read (422), matching `bindings.rs` and `tools.rs`; only a failed statement is a 500.
+    #[test]
+    fn a_corrupt_stored_row_is_the_reference_validation_error() {
+        assert_eq!(
+            AvailableError::from(CatalogStoreError::Corrupt("stored row")),
+            AvailableError::Invalid
+        );
+        assert_eq!(
+            AvailableError::from(CatalogStoreError::Database(sqlx::Error::PoolClosed)),
+            AvailableError::Internal
+        );
+    }
+
+    /// `validate_profile`'s `ValueError` is the caller's 422 through every route-level mapping,
+    /// never the catalog conflict's 409.
+    #[test]
+    fn an_invalid_credential_profile_is_not_a_catalog_conflict() {
+        assert_eq!(
+            AvailableError::from(ToolkitServiceError::Invalid("wrong application")),
+            AvailableError::Invalid
+        );
+        assert_eq!(
+            AvailableError::from(CatalogResolverError::Invalid("wrong application")),
+            AvailableError::Invalid
+        );
+    }
 }
