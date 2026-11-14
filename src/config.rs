@@ -29,6 +29,8 @@ pub struct Config {
     /// Reported by `/health` and `/health/ready`; the deployment sets it true only when the
     /// execution slice is live.
     pub execution_enabled: bool,
+    /// The `MCP_MAX_PACKAGE_*` bounds a submitted tool package is validated against.
+    pub packages: PackageLimits,
 }
 
 impl Config {
@@ -64,7 +66,67 @@ impl Config {
             database_migrate_url: get("DATABASE_MIGRATE_URL"),
             bind_addr,
             execution_enabled,
+            packages: PackageLimits::from_lookup(get)?,
         })
+    }
+}
+
+/// The package bounds from the reference `Settings`: how many files a submitted tool package may
+/// carry and how large they and their total may be.
+///
+/// Env names are the reference's (`MCP_` prefix, `Settings` in `src/config.py`), and so are the
+/// defaults. Every bound is a `PositiveInt` there, so zero is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackageLimits {
+    /// `MCP_MAX_PACKAGE_FILES`: maximum number of files in one package.
+    pub max_package_files: usize,
+    /// `MCP_MAX_PACKAGE_FILE_BYTES`: maximum UTF-8 bytes of one file's content.
+    pub max_package_file_bytes: usize,
+    /// `MCP_MAX_PACKAGE_BYTES`: maximum UTF-8 bytes of all file contents together.
+    pub max_package_bytes: usize,
+}
+
+impl Default for PackageLimits {
+    fn default() -> Self {
+        Self {
+            max_package_files: 64,
+            max_package_file_bytes: 262_144,
+            max_package_bytes: 1_048_576,
+        }
+    }
+}
+
+impl PackageLimits {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`PackageLimits::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let limits = Self {
+            max_package_files: positive_int_setting(&get, "MCP_MAX_PACKAGE_FILES", 64)?,
+            max_package_file_bytes: positive_int_setting(
+                &get,
+                "MCP_MAX_PACKAGE_FILE_BYTES",
+                262_144,
+            )?,
+            max_package_bytes: positive_int_setting(&get, "MCP_MAX_PACKAGE_BYTES", 1_048_576)?,
+        };
+        limits.validate()?;
+        Ok(limits)
+    }
+
+    /// The reference's `consistent_limits` rule: one file can never be allowed to exceed the
+    /// package it is part of.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_package_file_bytes > self.max_package_bytes {
+            return Err(ConfigError::Invalid {
+                name: "MCP_MAX_PACKAGE_FILE_BYTES",
+                reason: "file limit exceeds package limit".into(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -275,6 +337,23 @@ fn int_setting(
     }
 }
 
+fn positive_int_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: usize,
+) -> Result<usize, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<usize>() {
+            Ok(parsed) if parsed > 0 => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not a positive integer"),
+            }),
+        },
+    }
+}
+
 fn u64_setting(
     get: &impl Fn(&str) -> Option<String>,
     name: &'static str,
@@ -351,6 +430,72 @@ mod tests {
             cfg(&[("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "nope")]),
             Err(ConfigError::Invalid { .. })
         ));
+    }
+
+    #[test]
+    fn package_limits_take_reference_defaults_and_env_names() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let defaults = cfg(&base).unwrap().packages;
+        assert_eq!(defaults, PackageLimits::default());
+        assert_eq!(defaults.max_package_files, 64);
+        assert_eq!(defaults.max_package_file_bytes, 262_144);
+        assert_eq!(defaults.max_package_bytes, 1_048_576);
+
+        let mut pairs = base.to_vec();
+        pairs.extend_from_slice(&[
+            ("MCP_MAX_PACKAGE_FILES", "2"),
+            ("MCP_MAX_PACKAGE_FILE_BYTES", "10"),
+            ("MCP_MAX_PACKAGE_BYTES", "20"),
+        ]);
+        let configured = cfg(&pairs).unwrap().packages;
+        assert_eq!(configured.max_package_files, 2);
+        assert_eq!(configured.max_package_file_bytes, 10);
+        assert_eq!(configured.max_package_bytes, 20);
+    }
+
+    #[test]
+    fn package_limits_are_positive_and_a_file_may_not_exceed_its_package() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let with = |name: &'static str, value: &'static str| {
+            let mut pairs = base.to_vec();
+            pairs.push((name, value));
+            cfg(&pairs)
+        };
+        for value in ["0", "-1", "1.5", "many"] {
+            assert!(
+                with("MCP_MAX_PACKAGE_FILES", value).is_err(),
+                "MCP_MAX_PACKAGE_FILES={value}"
+            );
+            assert!(
+                with("MCP_MAX_PACKAGE_FILE_BYTES", value).is_err(),
+                "MCP_MAX_PACKAGE_FILE_BYTES={value}"
+            );
+            assert!(
+                with("MCP_MAX_PACKAGE_BYTES", value).is_err(),
+                "MCP_MAX_PACKAGE_BYTES={value}"
+            );
+        }
+        // `max_package_file_bytes <= max_package_bytes` is the reference's consistent-limits rule.
+        let over = [
+            ("DATABASE_URL", "postgres://x"),
+            ("BIND_ADDR", "0.0.0.0:9"),
+            ("MCP_MAX_PACKAGE_FILE_BYTES", "21"),
+            ("MCP_MAX_PACKAGE_BYTES", "20"),
+        ];
+        assert_eq!(
+            cfg(&over).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_MAX_PACKAGE_FILE_BYTES",
+                reason: "file limit exceeds package limit".into(),
+            }
+        );
+        let equal = [
+            ("DATABASE_URL", "postgres://x"),
+            ("BIND_ADDR", "0.0.0.0:9"),
+            ("MCP_MAX_PACKAGE_FILE_BYTES", "20"),
+            ("MCP_MAX_PACKAGE_BYTES", "20"),
+        ];
+        assert!(cfg(&equal).is_ok());
     }
 
     fn auth_cfg(pairs: &[(&str, &str)]) -> Result<AuthConfig, ConfigError> {

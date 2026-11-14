@@ -12,13 +12,16 @@ use mcp_server_rs::catalog::lifecycle::{
     toolkit_transition_allowed,
 };
 use mcp_server_rs::catalog::models::{Runtime, ToolLimits, ToolManifest, VersionDescriptor};
-use mcp_server_rs::catalog::package::canonical_path;
+use mcp_server_rs::catalog::package::{
+    PackageFile, canonical_path, package_digest, validate_package,
+};
 use mcp_server_rs::catalog::public::{
     RESERVED_NAMES, RUN_STATUSES, output_envelope, validate_public_input,
 };
 use mcp_server_rs::catalog::validation::{
     ARRAYS, DIALECT, MAPS, SINGLE, SUPPORTED, SchemaLimits, bounded_json, validate_schema,
 };
+use mcp_server_rs::config::PackageLimits;
 
 fn err<T: std::fmt::Debug>(result: Result<T, CatalogError>) -> String {
     result.unwrap_err().to_string()
@@ -719,4 +722,266 @@ fn package_paths_are_canonical() {
     for path in ["", "/main.py", "a/../b", "a//b", "a\\b", "c:x"] {
         assert!(canonical_path(path).is_err(), "{path:?}");
     }
+}
+
+/// Computed from the pinned Python oracle (`src/catalog/package.py::package_digest`).
+const DIGEST_FIXTURE: &str = "02e04959230a8cc0d64e5267a3c7651f68f849c5862c63581189d55dc1f7511d";
+
+fn digest_files() -> Vec<PackageFile> {
+    vec![
+        PackageFile {
+            path: "tool.py".to_owned(),
+            content: "def run(x):\n    return x\n".to_owned(),
+        },
+        PackageFile {
+            path: "meta/readme.md".to_owned(),
+            content: "h\u{e9}llo\n".to_owned(),
+        },
+    ]
+}
+
+#[test]
+fn package_digest_matches_the_reference() {
+    let files = digest_files();
+    assert_eq!(package_digest(&files), DIGEST_FIXTURE);
+    let mut reversed = files.clone();
+    reversed.reverse();
+    assert_eq!(
+        package_digest(&reversed),
+        DIGEST_FIXTURE,
+        "the digest must not depend on file order"
+    );
+
+    // The reference's own golden fixtures (`tests/fixtures/package-golden.json`), digests
+    // recomputed from the pinned oracle.
+    let golden: [(Vec<PackageFile>, &str); 2] = [
+        (
+            vec![PackageFile {
+                path: "main.py".to_owned(),
+                content: "async def run(inputs, ctx):\n    return {}\n".to_owned(),
+            }],
+            "7a77ec4fd13e6000d7f2c289e767b42b181213f29ae8e9b72a05279f5f0871ad",
+        ),
+        (
+            vec![
+                PackageFile {
+                    path: "package/main.py".to_owned(),
+                    content: "async def run(inputs, ctx):\n    return {}\n".to_owned(),
+                },
+                PackageFile {
+                    path: "package/__init__.py".to_owned(),
+                    content: String::new(),
+                },
+                PackageFile {
+                    path: "data/message.txt".to_owned(),
+                    content: "caf\u{e9} \u{2615}\n".to_owned(),
+                },
+            ],
+            "7781c2b487d8bde6941ae9b769fde3635666ff51190802907376739cde93a0bd",
+        ),
+    ];
+    for (files, expected) in &golden {
+        assert_eq!(package_digest(files), *expected);
+        let mut reversed = files.clone();
+        reversed.reverse();
+        assert_eq!(package_digest(&reversed), *expected);
+    }
+}
+
+#[test]
+fn a_canonical_package_is_accepted() {
+    let files = digest_files();
+    validate_package(
+        &files,
+        "tool:run",
+        DIGEST_FIXTURE,
+        &PackageLimits::default(),
+    )
+    .expect("canonical package");
+}
+
+#[test]
+fn package_paths_must_already_be_nfc() {
+    // The reference refuses `unicodedata.normalize("NFC", path) != path`: `e` + U+0301 is a
+    // decomposed spelling, the precomposed `é` is accepted.
+    assert!(canonical_path("cafe\u{301}.py").is_err());
+    assert!(canonical_path("he\u{301}llo.txt").is_err());
+    assert_eq!(canonical_path("caf\u{e9}.py").unwrap(), "caf\u{e9}.py");
+    assert_eq!(canonical_path("h\u{e9}llo.txt").unwrap(), "h\u{e9}llo.txt");
+}
+
+#[test]
+fn package_refuses_duplicates_and_file_directory_collisions() {
+    let limits = PackageLimits::default();
+    let files = digest_files();
+
+    let mut duplicate = files.clone();
+    duplicate.push(files[0].clone());
+    assert_eq!(
+        err(validate_package(
+            &duplicate,
+            "tool:run",
+            &package_digest(&duplicate),
+            &limits
+        )),
+        "duplicate package path"
+    );
+
+    let mut colliding = files.clone();
+    colliding.push(PackageFile {
+        path: "tool.py/inner.py".to_owned(),
+        content: String::new(),
+    });
+    assert_eq!(
+        err(validate_package(
+            &colliding,
+            "tool:run",
+            &package_digest(&colliding),
+            &limits
+        )),
+        "package file/directory collision"
+    );
+}
+
+#[test]
+fn package_count_and_size_limits_are_enforced() {
+    let files = digest_files();
+    let digest = package_digest(&files);
+    let limits = PackageLimits::default();
+
+    assert_eq!(
+        err(validate_package(&[], "tool:run", &digest, &limits)),
+        "package file count outside configured limit"
+    );
+    let one_file = PackageLimits {
+        max_package_files: 1,
+        ..PackageLimits::default()
+    };
+    assert_eq!(
+        err(validate_package(&files, "tool:run", &digest, &one_file)),
+        "package file count outside configured limit"
+    );
+
+    let tiny_file = PackageLimits {
+        max_package_file_bytes: 1,
+        ..PackageLimits::default()
+    };
+    assert_eq!(
+        err(validate_package(&files, "tool:run", &digest, &tiny_file)),
+        "package file too large"
+    );
+
+    // Each file fits its own bound; their sum does not fit the package bound.
+    let oversized = vec![
+        PackageFile {
+            path: "tool.py".to_owned(),
+            content: "x".repeat(40),
+        },
+        PackageFile {
+            path: "meta/readme.md".to_owned(),
+            content: "y".repeat(40),
+        },
+    ];
+    let tight_total = PackageLimits {
+        max_package_file_bytes: 50,
+        max_package_bytes: 50,
+        ..PackageLimits::default()
+    };
+    assert_eq!(
+        err(validate_package(
+            &oversized,
+            "tool:run",
+            &package_digest(&oversized),
+            &tight_total
+        )),
+        "package too large"
+    );
+}
+
+#[test]
+fn package_entrypoints_are_pattern_checked_and_must_exist() {
+    let files = digest_files();
+    let digest = package_digest(&files);
+    let limits = PackageLimits::default();
+    for entrypoint in [
+        "package.main",
+        "package.main:run()",
+        "/tmp/main:run",
+        "package.main:run.extra",
+        "tool:",
+        ":run",
+        "tool..run:x",
+        // `re.ASCII`: a Unicode word character never matches.
+        "t\u{f6}ol:run",
+        "tool:r\u{fc}n",
+    ] {
+        assert_eq!(
+            err(validate_package(&files, entrypoint, &digest, &limits)),
+            "entrypoint must be package.module:function",
+            "{entrypoint:?}"
+        );
+    }
+
+    assert_eq!(
+        err(validate_package(&files, "missing:run", &digest, &limits)),
+        "entrypoint module missing"
+    );
+}
+
+#[test]
+fn package_digest_must_match_the_content() {
+    let files = digest_files();
+    let limits = PackageLimits::default();
+    assert_eq!(
+        err(validate_package(
+            &files,
+            "tool:run",
+            &"a".repeat(64),
+            &limits
+        )),
+        "package digest mismatch"
+    );
+
+    let mut tampered = files.clone();
+    tampered[1].content.push('!');
+    assert_eq!(
+        err(validate_package(
+            &tampered,
+            "tool:run",
+            DIGEST_FIXTURE,
+            &limits
+        )),
+        "package digest mismatch"
+    );
+}
+
+#[test]
+fn bounded_json_counts_characters_not_bytes() {
+    // `é` is two UTF-8 bytes, so ten of them are twenty bytes but only ten characters. The
+    // reference's per-string check is `len(item) > max_bytes` on a `str` — characters — so ten
+    // characters pass that check and the refusal comes from the aggregate serialized-size check
+    // instead. A byte-counting port refuses earlier with "JSON string exceeds byte limit".
+    assert_eq!(
+        err(bounded_json(&json!("\u{e9}".repeat(10)), 10, 100, 10)),
+        "JSON byte limit exceeded"
+    );
+    // One character past the limit is refused by the per-string check.
+    assert_eq!(
+        err(bounded_json(&json!("\u{e9}".repeat(11)), 10, 100, 10)),
+        "JSON string exceeds byte limit"
+    );
+    // The same boundary for a four-byte character.
+    assert_eq!(
+        err(bounded_json(&json!("\u{1f370}".repeat(10)), 10, 100, 10)),
+        "JSON byte limit exceeded"
+    );
+    assert_eq!(
+        err(bounded_json(&json!("\u{1f370}".repeat(11)), 10, 100, 10)),
+        "JSON string exceeds byte limit"
+    );
+    // A multi-byte string that fits inside both bounds is accepted.
+    assert_eq!(
+        bounded_json(&json!("\u{e9}".repeat(4)), 10, 100, 10).unwrap(),
+        1
+    );
 }

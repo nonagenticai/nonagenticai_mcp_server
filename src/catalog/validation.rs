@@ -83,9 +83,10 @@ impl Default for SchemaLimits {
 
 /// Count nodes and enforce the byte, node and depth bounds before serializing.
 ///
-/// The reference counts a string with Python's `len`, i.e. characters; this port compares UTF-8
-/// bytes, which is what the final serialized-size check measures too. Every refusal message is
-/// the reference's. The reference's "JSON object keys must be strings" check cannot fail here:
+/// The per-string bound counts characters, exactly as the reference's `len(item)` on a `str`
+/// does; so the refusal point is identical. The aggregate bound counts UTF-8 bytes of the
+/// serialized value, as the reference's final check does. Every refusal message is the
+/// reference's. The reference's "JSON object keys must be strings" check cannot fail here:
 /// `serde_json::Value` object keys are always strings.
 pub fn bounded_json(
     value: &Value,
@@ -101,7 +102,7 @@ pub fn bounded_json(
             return Err(CatalogError("JSON complexity exceeds configured limits"));
         }
         match item {
-            Value::String(text) if text.len() > max_bytes => {
+            Value::String(text) if text.chars().count() > max_bytes => {
                 return Err(CatalogError("JSON string exceeds byte limit"));
             }
             Value::Object(map) => {

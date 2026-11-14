@@ -1,13 +1,26 @@
 //! Canonical packages: paths are checked here; inspecting a package never imports uploaded code.
 //!
-//! The reference's `package_digest` and `validate_package` are not ported in this slice: the
-//! digest is SHA-256 over the sorted `[path, content]` pairs and this crate carries no SHA-256
-//! implementation or dependency. Everything here is dependency-free and faithful except the
-//! reference's NFC normalization check, which needs Unicode tables this crate does not have.
+//! Ported from the reference's `src/catalog/package.py`. [`canonical_path`], [`package_digest`]
+//! and [`validate_package`] enforce the same rules in the same order, so a package either side
+//! refuses is refused here and an accepted package carries the identical digest.
+//!
+//! The digest is SHA-256 hex over compact UTF-8 JSON of the sorted `[path, content]` pairs.
+//! serde_json's compact array encoding matches the reference's
+//! `json.dumps(pairs, ensure_ascii=False, separators=(",", ":"), allow_nan=False)` byte for byte
+//! for these pairs: no insignificant whitespace, `"`/`\`/control escapes, and non-ASCII emitted
+//! raw. Sorting is by UTF-8 bytes, which is code-point order, the order Python's `sorted` uses.
 
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::catalog::error::CatalogError;
+use crate::config::PackageLimits;
 
 /// One file of an uploaded tool package. The reference model is strict and forbids extras.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,11 +32,18 @@ pub struct PackageFile {
     pub content: String,
 }
 
-/// Check a package path: canonical relative POSIX, at most 512 UTF-8 bytes.
+/// The reference's `[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*` with `re.ASCII`: `\w` is
+/// spelled out as `[A-Za-z0-9_]`, so a Unicode word character never matches.
+static ENTRYPOINT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\A[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*\z")
+        .expect("the entrypoint pattern is valid")
+});
+
+/// Check a package path: canonical relative POSIX, at most 512 UTF-8 bytes, and already its own
+/// Unicode NFC form.
 ///
-/// Deviation from the reference, deliberate: the reference also rejects paths that are not
-/// already Unicode NFC-normalized. Rust's standard library has no normalization tables and the
-/// crate may take no new dependency, so that one check is absent; every other rule is enforced.
+/// The NFC rule is the reference's `unicodedata.normalize("NFC", path) != path`: a decomposed
+/// spelling such as `e` followed by U+0301 is refused, while the precomposed `é` is accepted.
 pub fn canonical_path(path: &str) -> Result<String, CatalogError> {
     let message = CatalogError("package paths must be canonical relative POSIX paths");
     if path.is_empty()
@@ -33,6 +53,7 @@ pub fn canonical_path(path: &str) -> Result<String, CatalogError> {
         || path
             .chars()
             .any(|character| (character as u32) < 32 || (character as u32) == 127)
+        || !path.nfc().eq(path.chars())
         || path
             .split('/')
             .any(|segment| matches!(segment, "" | "." | ".."))
@@ -41,6 +62,79 @@ pub fn canonical_path(path: &str) -> Result<String, CatalogError> {
     } else {
         Ok(path.to_owned())
     }
+}
+
+/// SHA-256 hex of compact UTF-8 JSON of the sorted `[path, exact content]` pairs.
+pub fn package_digest(files: &[PackageFile]) -> String {
+    let mut pairs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|file| (file.path.as_str(), file.content.as_str()))
+        .collect();
+    pairs.sort_unstable();
+    let encoded = serde_json::to_string(&pairs).expect("package pairs are JSON-serializable");
+    hex(&Sha256::digest(encoded.as_bytes()))
+}
+
+/// The reference's `hexdigest()`.
+fn hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    hex
+}
+
+/// Refuse a package the reference refuses, in the reference's order and with its messages.
+pub fn validate_package(
+    files: &[PackageFile],
+    entrypoint: &str,
+    digest: &str,
+    limits: &PackageLimits,
+) -> Result<(), CatalogError> {
+    if files.is_empty() || files.len() > limits.max_package_files {
+        return Err(CatalogError("package file count outside configured limit"));
+    }
+    let mut paths: BTreeSet<&str> = BTreeSet::new();
+    let mut total = 0usize;
+    for file in files {
+        // The reference stores the canonicalized path; this check never rewrites it, so the
+        // input spelling is the canonical one.
+        canonical_path(&file.path)?;
+        if !paths.insert(file.path.as_str()) {
+            return Err(CatalogError("duplicate package path"));
+        }
+        let size = file.content.len();
+        if size > limits.max_package_file_bytes {
+            return Err(CatalogError("package file too large"));
+        }
+        total += size;
+    }
+    if total > limits.max_package_bytes {
+        return Err(CatalogError("package too large"));
+    }
+    for path in &paths {
+        let parts: Vec<&str> = path.split('/').collect();
+        for prefix in 1..parts.len() {
+            if paths.contains(parts[..prefix].join("/").as_str()) {
+                return Err(CatalogError("package file/directory collision"));
+            }
+        }
+    }
+    if !ENTRYPOINT.is_match(entrypoint) {
+        return Err(CatalogError("entrypoint must be package.module:function"));
+    }
+    let module = entrypoint
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .replace('.', "/");
+    if !paths.contains(format!("{module}.py").as_str()) {
+        return Err(CatalogError("entrypoint module missing"));
+    }
+    if package_digest(files) != digest {
+        return Err(CatalogError("package digest mismatch"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -54,6 +148,8 @@ mod tests {
             "package/main.py"
         );
         assert_eq!(canonical_path("main.py").unwrap(), "main.py");
+        // Precomposed forms are their own NFC form and are accepted.
+        assert_eq!(canonical_path("héllo.txt").unwrap(), "héllo.txt");
     }
 
     #[test]
@@ -68,6 +164,8 @@ mod tests {
             "c:/x.py",
             "a\nb.py",
             "a\u{7f}b.py",
+            // `e` + U+0301 decomposes differently from `é`.
+            "cafe\u{301}.py",
         ] {
             assert!(canonical_path(path).is_err(), "{path:?} must be refused");
         }
