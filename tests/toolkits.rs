@@ -15,23 +15,32 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool};
 
 use mcp_server_rs::auth::{Principal, Rfc4122Uuid};
-use mcp_server_rs::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
+use mcp_server_rs::catalog::ids::{AuthorityId, Name, PositiveVersion, Uuid7};
 use mcp_server_rs::catalog::lifecycle::VersionStatus;
-use mcp_server_rs::catalog::models::{Attribution, ToolManifest};
+use mcp_server_rs::catalog::models::{
+    Attribution, Constraint, OperationConstraints, ToolLimits, ToolManifest,
+};
 use mcp_server_rs::catalog::package::PackageFile;
-use mcp_server_rs::catalog::toolkit_models::{ToolkitDescriptor, ToolkitManifest};
+use mcp_server_rs::catalog::toolkit_models::{
+    BindingSpec, BoundContext, EffectiveTool, ToolReference, ToolkitDescriptor, ToolkitManifest,
+    ToolkitReference,
+};
 use mcp_server_rs::db;
 use mcp_server_rs::storage::catalog::{CatalogRepository, CatalogStoreError};
 use mcp_server_rs::storage::toolkits as toolkit_store;
-use mcp_server_rs::toolkits::resolver::SelectionResolver;
+use mcp_server_rs::toolkits::resolver::{ResolveError, SelectionResolver};
 use mcp_server_rs::toolkits::service::{ToolkitService, ToolkitServiceError};
 
 const TENANT_A: &str = "10000000-0000-7000-8000-000000000001";
 const TENANT_B: &str = "10000000-0000-7000-8000-000000000002";
 const TENANT_PLATFORM: &str = "10000000-0000-7000-8000-0000000000ff";
 const LICENSE: &str = "30000000-0000-4000-8000-000000000001";
+const SERVICE_ID: &str = "30000000-0000-7000-8000-0000000000ff";
 const TOOL_ALPHA: &str = "20000000-0000-7000-8000-000000000001";
 const TOOL_ZETA: &str = "20000000-0000-7000-8000-000000000002";
+const TOOL_GAMMA: &str = "20000000-0000-7000-8000-000000000003";
+const OPERATION_ALPHA: &str = "40000000-0000-7000-8000-000000000001";
+const OPERATION_BETA: &str = "40000000-0000-7000-8000-000000000002";
 const TOOLKIT_1: &str = "01900000-0000-7000-8000-000000000001";
 const TOOLKIT_2: &str = "01900000-0000-7000-8000-000000000002";
 const TOOLKIT_3: &str = "01900000-0000-7000-8000-000000000003";
@@ -244,8 +253,8 @@ fn files() -> Vec<PackageFile> {
 }
 
 /// A strict, valid tool manifest. The runtime is external so no package digest is involved.
-fn tool_manifest(name: &str, tool: &str) -> ToolManifest {
-    serde_json::from_value(json!({
+fn tool_json(name: &str, tool: &str) -> Value {
+    json!({
         "schema_version": 1,
         "tool_id": tool,
         "tenant_id": TENANT_A,
@@ -260,8 +269,11 @@ fn tool_manifest(name: &str, tool: &str) -> ToolManifest {
         "context_schema": {"type": "object", "properties": {}, "additionalProperties": false},
         "package_sha256": "a".repeat(64),
         "effect": "read_only",
-    }))
-    .expect("valid tool manifest")
+    })
+}
+
+fn tool_manifest(name: &str, tool: &str) -> ToolManifest {
+    serde_json::from_value(tool_json(name, tool)).expect("valid tool manifest")
 }
 
 /// A strict, valid toolkit manifest selecting exact tools and inclusions.
@@ -755,5 +767,575 @@ async fn list_returns_identities_in_order_and_pages() {
     assert_eq!(page[1].toolkit_id.as_str(), TOOLKIT_3);
     assert_eq!(page[1].name.as_str(), "third_toolkit");
     assert_eq!(page[1].revision.get(), 1);
+    fixture.finish().await;
+}
+
+// ── binding selection (`SelectionResolver.binding`) ─────────────────────────────────────────
+
+fn manifest(value: Value) -> ToolManifest {
+    serde_json::from_value(value).expect("valid tool manifest")
+}
+
+fn writer() -> Value {
+    json!({"subject": "agent-09", "license_id": LICENSE})
+}
+
+/// A published platform service, the dependency every seeded operation names.
+async fn seed_service(fixture: &Fixture) {
+    sqlx::query(
+        "INSERT INTO public.mcp_services(service_id,service_key,created_by) \
+         VALUES ($1::uuid,'synthetic_service',$2)",
+    )
+    .bind(SERVICE_ID)
+    .bind(writer())
+    .execute(&fixture.pool)
+    .await
+    .expect("service identity");
+    sqlx::query(
+        "INSERT INTO public.mcp_service_versions(service_id,version,manifest,created_by,updated_by) \
+         VALUES ($1::uuid,1,$2,$3,$3)",
+    )
+    .bind(SERVICE_ID)
+    .bind(json!({
+        "schema_version": 1,
+        "service_id": SERVICE_ID,
+        "version": 1,
+        "service_key": "synthetic_service",
+        "destination_alias": "synthetic_source",
+        "auth_adapter": "source",
+        "credential_profile_key": "synthetic_profile",
+        "max_request_bytes": 4096,
+        "max_response_bytes": 4096,
+    }))
+    .bind(writer())
+    .execute(&fixture.pool)
+    .await
+    .expect("service version");
+    sqlx::query(
+        "UPDATE public.mcp_service_versions SET status='published' \
+         WHERE service_id = $1::uuid AND version = 1",
+    )
+    .bind(SERVICE_ID)
+    .execute(&fixture.pool)
+    .await
+    .expect("publish service");
+}
+
+/// A published operation whose manifest carries the caller's overrides.
+async fn seed_operation(fixture: &Fixture, operation: &str, overrides: Value) {
+    let mut manifest = json!({
+        "schema_version": 1,
+        "operation_id": operation,
+        "version": 1,
+        "service": {"id": SERVICE_ID, "version": 1},
+        "method": "GET",
+        "path_template": "/synthetic",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "output_schema": {"type": "object"},
+        "response_projection": ["/id"],
+        "scope_rules": [],
+        "mappings": [],
+        "effect": "read_only",
+        "timeout_seconds": 30,
+        "pagination_limit": 100,
+        "max_response_bytes": 4096
+    });
+    for (key, value) in overrides.as_object().expect("an override object") {
+        manifest[key] = value.clone();
+    }
+    sqlx::query(
+        "INSERT INTO public.mcp_operation_versions(operation_id,version,service_id,\
+         service_version,manifest,created_by,updated_by) VALUES ($1::uuid,1,$2::uuid,1,$3,$4,$4)",
+    )
+    .bind(operation)
+    .bind(SERVICE_ID)
+    .bind(manifest)
+    .bind(writer())
+    .execute(&fixture.pool)
+    .await
+    .expect("operation version");
+    sqlx::query(
+        "UPDATE public.mcp_operation_versions SET status='published' \
+         WHERE operation_id = $1::uuid AND version = 1",
+    )
+    .bind(operation)
+    .execute(&fixture.pool)
+    .await
+    .expect("publish operation");
+}
+
+/// A published tool from a fully shaped manifest.
+async fn published_tool_manifest(fixture: &Fixture, manifest: &ToolManifest) {
+    let repository = fixture.repository();
+    let tenant = manifest.tenant_id.clone();
+    repository
+        .create(&tenant, manifest, &files(), &actor())
+        .await
+        .expect("create tool");
+    repository
+        .transition(
+            &tenant,
+            &manifest.tool_id,
+            manifest.version,
+            VersionStatus::Published,
+            &actor(),
+            version(1),
+        )
+        .await
+        .expect("publish tool");
+}
+
+/// Create a toolkit and publish it, returning the published descriptor.
+async fn published_toolkit(fixture: &Fixture, manifest: &ToolkitManifest) -> ToolkitDescriptor {
+    let service = fixture.service();
+    let drafted = create_toolkit(&service, manifest).await;
+    service
+        .transition(
+            &principal(TENANT_A, true),
+            &manifest.toolkit_id,
+            manifest.version,
+            VersionStatus::Published,
+            drafted.revision,
+        )
+        .await
+        .expect("publish toolkit")
+}
+
+fn applicability_of(mut manifest: ToolkitManifest, work_type: &str) -> ToolkitManifest {
+    manifest.applicability.work_type = Some(Name::new(work_type).expect("valid label"));
+    manifest
+}
+
+fn operation_constraints(operation: &str, rules: Value) -> OperationConstraints {
+    serde_json::from_value(json!({
+        "operation": {"id": operation, "version": 1},
+        "rules": rules,
+    }))
+    .expect("valid operation constraints")
+}
+
+fn context() -> BoundContext {
+    BoundContext {
+        tenant_id: authority(TENANT_A),
+        project_id: None,
+        workspace_id: None,
+        project_phase: None,
+        work_type: None,
+        card_stage: None,
+        responsibility: None,
+        test_command: None,
+        reviewed_commit: None,
+    }
+}
+
+fn spec_for(context: BoundContext, toolkits: &[&str]) -> BindingSpec {
+    BindingSpec {
+        schema_version: 1,
+        credential_profile_id: identity("20000000-0000-7000-8000-0000000000f0"),
+        toolkits: toolkits
+            .iter()
+            .map(|toolkit| ToolkitReference {
+                id: identity(toolkit),
+                version: version(1),
+                tenant_id: Some(authority(TENANT_A)),
+            })
+            .collect(),
+        tool_subset: None,
+        context,
+        operation_constraints: Vec::new(),
+        limits: ToolLimits::default(),
+        expires_at: "2026-11-14T00:00:00Z".parse().expect("an instant"),
+        enabled: true,
+    }
+}
+
+fn reference(tool: &str, owner: &str) -> ToolReference {
+    ToolReference {
+        id: identity(tool),
+        version: version(1),
+        tenant_id: authority(owner),
+    }
+}
+
+async fn binding_of(
+    fixture: &Fixture,
+    spec: &BindingSpec,
+) -> Result<Vec<EffectiveTool>, ResolveError> {
+    let resolver = SelectionResolver {
+        platform_tenant_id: authority(TENANT_PLATFORM),
+    };
+    let mut conn = fixture.pool.acquire().await.expect("connection");
+    resolver
+        .binding(&mut conn, &authority(TENANT_A), spec, false)
+        .await
+}
+
+fn selection_invalid(error: ResolveError) -> &'static str {
+    match error {
+        ResolveError::Invalid(message) => message,
+        other => panic!("expected invalid, got {other:?}"),
+    }
+}
+
+fn selection_conflict(error: ResolveError) -> &'static str {
+    match error {
+        ResolveError::Conflict(message) => message,
+        other => panic!("expected conflict, got {other:?}"),
+    }
+}
+
+fn selection_not_found(error: ResolveError) -> &'static str {
+    match error {
+        ResolveError::NotFound(message) => message,
+        other => panic!("expected not-found, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn binding_returns_the_flattened_selection_narrowed_by_spec_limits() {
+    let fixture = Fixture::new().await;
+    let mut zeta = tool_json("zeta_tool", TOOL_ZETA);
+    zeta["operation"] = json!("synthetic.zeta_tool");
+    published_tool_manifest(&fixture, &manifest(zeta)).await;
+    let mut alpha = tool_json("alpha_tool", TOOL_ALPHA);
+    alpha["operation"] = json!("synthetic.alpha_tool");
+    published_tool_manifest(&fixture, &manifest(alpha)).await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ZETA, 1), (TOOL_ALPHA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let mut spec = spec_for(context(), &[TOOLKIT_1]);
+    spec.limits = ToolLimits {
+        wall_seconds: 30,
+        api_calls: 3,
+        ..ToolLimits::default()
+    };
+    let resolved = binding_of(&fixture, &spec).await.expect("binding resolves");
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(resolved[0].public_name.as_str(), "alpha_tool");
+    assert_eq!(resolved[0].tool.id.as_str(), TOOL_ALPHA);
+    assert_eq!(resolved[1].public_name.as_str(), "zeta_tool");
+    assert_eq!(resolved[1].tool.id.as_str(), TOOL_ZETA);
+    let narrowed = ToolLimits {
+        wall_seconds: 30,
+        api_calls: 3,
+        ..ToolLimits::default()
+    };
+    assert_eq!(resolved[0].limits, narrowed);
+    assert_eq!(resolved[1].limits, narrowed);
+    assert!(
+        resolved
+            .iter()
+            .all(|entry| entry.operation_constraints.is_empty())
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_a_context_for_another_tenant() {
+    let fixture = Fixture::new().await;
+    let mut context = context();
+    context.tenant_id = authority(TENANT_B);
+    let refused = binding_of(&fixture, &spec_for(context, &[TOOLKIT_1]))
+        .await
+        .expect_err("another tenant's context");
+    assert_eq!(
+        selection_invalid(refused),
+        "bound tenant differs from authenticated tenant"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_a_foreign_toolkit_pin() {
+    let fixture = Fixture::new().await;
+    let mut spec = spec_for(context(), &[TOOLKIT_1]);
+    spec.toolkits[0].tenant_id = Some(authority(TENANT_B));
+    let refused = binding_of(&fixture, &spec)
+        .await
+        .expect_err("a foreign pin");
+    assert_eq!(selection_not_found(refused), "toolkit version not found");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_keeps_only_a_valid_tool_subset() {
+    let fixture = Fixture::new().await;
+    published_tool(&fixture, TOOL_ZETA, "zeta_tool").await;
+    published_tool(&fixture, TOOL_ALPHA, "alpha_tool").await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ZETA, 1), (TOOL_ALPHA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let mut outside = spec_for(context(), &[TOOLKIT_1]);
+    outside.tool_subset = Some(vec![reference(TOOL_GAMMA, TENANT_A)]);
+    let refused = binding_of(&fixture, &outside)
+        .await
+        .expect_err("the subset names a non-member");
+    assert_eq!(
+        selection_invalid(refused),
+        "subset contains tools outside toolkit membership"
+    );
+    let mut foreign = spec_for(context(), &[TOOLKIT_1]);
+    foreign.tool_subset = Some(vec![reference(TOOL_ZETA, TENANT_B)]);
+    let refused = binding_of(&fixture, &foreign)
+        .await
+        .expect_err("the owner is part of the reference");
+    assert_eq!(
+        selection_invalid(refused),
+        "subset contains tools outside toolkit membership"
+    );
+    let mut valid = spec_for(context(), &[TOOLKIT_1]);
+    valid.tool_subset = Some(vec![reference(TOOL_ZETA, TENANT_A)]);
+    let filtered = binding_of(&fixture, &valid)
+        .await
+        .expect("a member subset resolves");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].public_name.as_str(), "zeta_tool");
+    assert_eq!(filtered[0].tool.id.as_str(), TOOL_ZETA);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_an_operation_collision() {
+    let fixture = Fixture::new().await;
+    let mut alpha = tool_json("alpha_tool", TOOL_ALPHA);
+    alpha["operation"] = json!("synthetic.collision");
+    published_tool_manifest(&fixture, &manifest(alpha)).await;
+    let mut zeta = tool_json("zeta_tool", TOOL_ZETA);
+    zeta["operation"] = json!("synthetic.collision");
+    published_tool_manifest(&fixture, &manifest(zeta)).await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ALPHA, 1), (TOOL_ZETA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let refused = binding_of(&fixture, &spec_for(context(), &[TOOLKIT_1]))
+        .await
+        .expect_err("two tools, one canonical operation");
+    assert_eq!(
+        selection_conflict(refused),
+        "operation collision in effective selection"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_a_constraint_on_an_unselected_operation() {
+    let fixture = Fixture::new().await;
+    seed_service(&fixture).await;
+    seed_operation(&fixture, OPERATION_ALPHA, json!({})).await;
+    let mut tool = tool_json("alpha_tool", TOOL_ALPHA);
+    tool["allowed_operations"] = json!([{"id": OPERATION_ALPHA, "version": 1}]);
+    published_tool_manifest(&fixture, &manifest(tool)).await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ALPHA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let mut spec = spec_for(context(), &[TOOLKIT_1]);
+    spec.operation_constraints = vec![operation_constraints(
+        OPERATION_BETA,
+        json!([{"kind": "set_membership", "argument": "/tag", "values": ["a"]}]),
+    )];
+    let refused = binding_of(&fixture, &spec)
+        .await
+        .expect_err("no selected tool allows the operation");
+    assert_eq!(
+        selection_invalid(refused),
+        "binding constraint targets an unselected operation"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_appends_a_spec_constraint_to_the_toolkit_constraint() {
+    let fixture = Fixture::new().await;
+    seed_service(&fixture).await;
+    seed_operation(&fixture, OPERATION_ALPHA, json!({})).await;
+    let mut tool = tool_json("alpha_tool", TOOL_ALPHA);
+    tool["allowed_operations"] = json!([{"id": OPERATION_ALPHA, "version": 1}]);
+    tool["operation_constraints"] = json!([{
+        "operation": {"id": OPERATION_ALPHA, "version": 1},
+        "rules": [{"kind": "set_membership", "argument": "/tag", "values": ["a", "b"]}]
+    }]);
+    published_tool_manifest(&fixture, &manifest(tool)).await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ALPHA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let mut spec = spec_for(context(), &[TOOLKIT_1]);
+    spec.operation_constraints = vec![operation_constraints(
+        OPERATION_ALPHA,
+        json!([{"kind": "set_membership", "argument": "/tag", "values": ["b", "c"]}]),
+    )];
+    let resolved = binding_of(&fixture, &spec)
+        .await
+        .expect("the constraints intersect");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].operation_constraints.len(), 2);
+    assert_eq!(
+        resolved[0].operation_constraints[0].operation.id.as_str(),
+        OPERATION_ALPHA
+    );
+    assert_eq!(
+        resolved[0].operation_constraints[1].operation.id.as_str(),
+        OPERATION_ALPHA
+    );
+    let tool_rules = match &resolved[0].operation_constraints[0].rules[..] {
+        [Constraint::SetMembership(rule)] => rule.values.clone(),
+        other => panic!("expected the tool's set membership, got {other:?}"),
+    };
+    assert_eq!(tool_rules, vec![json!("a"), json!("b")]);
+    let spec_rules = match &resolved[0].operation_constraints[1].rules[..] {
+        [Constraint::SetMembership(rule)] => rule.values.clone(),
+        other => panic!("expected the spec's set membership, got {other:?}"),
+    };
+    assert_eq!(spec_rules, vec![json!("b"), json!("c")]);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_a_context_missing_a_required_property() {
+    let fixture = Fixture::new().await;
+    let mut tool = tool_json("alpha_tool", TOOL_ALPHA);
+    tool["context_schema"] = json!({
+        "type": "object",
+        "properties": {"project_id": {"type": "string"}},
+        "required": ["project_id"],
+        "additionalProperties": false
+    });
+    published_tool_manifest(&fixture, &manifest(tool)).await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ALPHA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let refused = binding_of(&fixture, &spec_for(context(), &[TOOLKIT_1]))
+        .await
+        .expect_err("the context lacks project_id");
+    assert_eq!(
+        selection_invalid(refused),
+        "instance does not match declared schema"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_a_context_mapping_pointer_the_context_lacks() {
+    let fixture = Fixture::new().await;
+    seed_service(&fixture).await;
+    seed_operation(
+        &fixture,
+        OPERATION_ALPHA,
+        json!({
+            "mappings": [{
+                "location": "body",
+                "target": "/owner",
+                "value": {"source": "context", "pointer": "/project_id"}
+            }]
+        }),
+    )
+    .await;
+    let mut tool = tool_json("alpha_tool", TOOL_ALPHA);
+    tool["allowed_operations"] = json!([{"id": OPERATION_ALPHA, "version": 1}]);
+    published_tool_manifest(&fixture, &manifest(tool)).await;
+    published_toolkit(
+        &fixture,
+        &toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ALPHA, 1)],
+            &[],
+        ),
+    )
+    .await;
+    let refused = binding_of(&fixture, &spec_for(context(), &[TOOLKIT_1]))
+        .await
+        .expect_err("the mapping pointer misses");
+    assert_eq!(
+        selection_invalid(refused),
+        "required bound context is missing"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn binding_refuses_a_toolkit_the_context_does_not_satisfy() {
+    let fixture = Fixture::new().await;
+    published_tool(&fixture, TOOL_ALPHA, "alpha_tool").await;
+    let manifest = applicability_of(
+        toolkit_manifest(
+            TOOLKIT_1,
+            TENANT_A,
+            1,
+            "synthetic_toolkit",
+            &[(TOOL_ALPHA, 1)],
+            &[],
+        ),
+        "review",
+    );
+    published_toolkit(&fixture, &manifest).await;
+    let refused = binding_of(&fixture, &spec_for(context(), &[TOOLKIT_1]))
+        .await
+        .expect_err("the context has no work type");
+    assert_eq!(
+        selection_invalid(refused),
+        "binding context does not satisfy toolkit applicability"
+    );
+    let mut satisfied = context();
+    satisfied.work_type = Some(Name::new("review").expect("valid label"));
+    let resolved = binding_of(&fixture, &spec_for(satisfied, &[TOOLKIT_1]))
+        .await
+        .expect("the label matches");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].public_name.as_str(), "alpha_tool");
     fixture.finish().await;
 }

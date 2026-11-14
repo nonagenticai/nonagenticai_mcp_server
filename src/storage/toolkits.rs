@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::catalog::ids::{AuthorityId, Name, PositiveVersion, Uuid7};
 use crate::catalog::lifecycle::{VersionStatus, toolkit_transition_allowed};
-use crate::catalog::models::{Attribution, ToolManifest};
+use crate::catalog::models::{Attribution, ExactReference, OperationManifest, ToolManifest};
 use crate::catalog::toolkit_models::{ToolReference, ToolkitDescriptor, ToolkitManifest};
 use crate::storage::catalog::CatalogStoreError;
 use crate::toolkits::resolver::{ResolveError, SelectionResolver};
@@ -216,6 +216,55 @@ pub async fn selectable_tools(
             return Err(CatalogStoreError::Conflict(
                 "selected operation is unavailable",
             ));
+        }
+    }
+    Ok(found)
+}
+
+/// Every requested operation manifest in one read, keyed by `(operation_id, version)`.
+///
+/// The reference's binding read: one statement for every operation behind a selection. A
+/// requested reference without a row is a stored-catalog violation, never a request error.
+pub async fn operation_manifests(
+    conn: &mut PgConnection,
+    references: &[ExactReference],
+) -> Result<HashMap<(String, u32), OperationManifest>, CatalogStoreError> {
+    if references.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let identities: Vec<String> = references
+        .iter()
+        .map(|reference| reference.id.as_str().to_owned())
+        .collect();
+    let versions: Vec<i32> = references
+        .iter()
+        .map(|reference| version_bits(reference.version))
+        .collect();
+    let rows = sqlx::query(
+        "SELECT operation_id::text AS operation_id,version,manifest \
+         FROM public.mcp_operation_versions \
+         WHERE (operation_id,version) IN \
+           (SELECT * FROM unnest($1::text[]::uuid[],$2::int[]))",
+    )
+    .bind(&identities)
+    .bind(&versions)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut found: HashMap<(String, u32), OperationManifest> =
+        HashMap::with_capacity(references.len());
+    for row in rows {
+        let identity: String = row.try_get("operation_id")?;
+        let stored: i32 = row.try_get("version")?;
+        let version =
+            u32::try_from(stored).map_err(|_| CatalogStoreError::Corrupt("operation version"))?;
+        let manifest: Value = row.try_get("manifest")?;
+        let manifest: OperationManifest = serde_json::from_value(manifest)
+            .map_err(|_| CatalogStoreError::Corrupt("operation manifest"))?;
+        found.insert((identity, version), manifest);
+    }
+    for reference in references {
+        if !found.contains_key(&(reference.id.as_str().to_owned(), reference.version.get())) {
+            return Err(CatalogStoreError::Corrupt("operation manifest missing"));
         }
     }
     Ok(found)
