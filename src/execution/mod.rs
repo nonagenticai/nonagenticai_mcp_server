@@ -10,6 +10,8 @@
 //! reference byte for byte. `tests/fixtures/phase3a/oracle.json` (generated from the pinned
 //! reference) is the specification.
 
+pub mod service;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

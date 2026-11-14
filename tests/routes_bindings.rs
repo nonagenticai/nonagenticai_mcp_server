@@ -189,6 +189,7 @@ impl Fixture {
             AppState {
                 pool: self.pool.clone(),
                 execution_enabled: false,
+                execution: mcp_server_rs::config::ExecutionSettings::default(),
                 license_app_key: Some(GATEWAY_APP_KEY.to_owned()),
                 approved_runner_images: Vec::new(),
                 platform_tenant_id: mcp_server_rs::auth::Rfc4122Uuid::parse(

@@ -73,6 +73,7 @@ async fn serve() -> Result<(), StartupError> {
                 approved_runner_images: cfg.approved_runner_images.clone(),
                 platform_tenant_id: cfg.platform_tenant_id,
                 catalog_page_size: cfg.catalog_page_size,
+                execution: cfg.execution.clone(),
             },
             &auth_config,
         )?,

@@ -55,7 +55,6 @@ upstreams = []
 [openapi_diff.ignore]
 paths = [
   "/mcp/toolkits/import",       # phase 5
-  "/mcp/runs*",                 # phase 3
   "/mcp/builder*",              # phase 5
   "/mcp/internal*",             # phase 5 (the tenant-scoped mirrors of builder/sources)
   "/mcp/sources*",              # phase 5
