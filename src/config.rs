@@ -39,6 +39,8 @@ pub struct Config {
     pub approved_runner_images: Vec<String>,
     /// The `MCP_MAX_PACKAGE_*` bounds a submitted tool package is validated against.
     pub packages: PackageLimits,
+    /// The `MCP_*` execution queue, timeout and retention bounds.
+    pub execution: ExecutionSettings,
 }
 
 impl Config {
@@ -58,16 +60,13 @@ impl Config {
                 name: "BIND_ADDR",
                 reason: format!("{e} (expected host:port, e.g. 0.0.0.0:9000)"),
             })?;
-        let execution_enabled = match get("EXECUTION_ENABLED") {
-            None => false,
-            Some(v) if v.eq_ignore_ascii_case("true") || v == "1" => true,
-            Some(v) if v.eq_ignore_ascii_case("false") || v == "0" => false,
-            Some(v) => {
-                return Err(ConfigError::Invalid {
-                    name: "EXECUTION_ENABLED",
-                    reason: format!("{v:?} is not one of true/false/1/0"),
-                });
-            }
+        // `EXECUTION_ENABLED` is this service's switch. The live deployment ConfigMap still sets
+        // the reference's prefixed `MCP_EXECUTION_ENABLED`, so the prefixed name is accepted as
+        // an alias during the drop-in cutover; the unprefixed name wins when both are set.
+        let execution_enabled = match (get("EXECUTION_ENABLED"), get("MCP_EXECUTION_ENABLED")) {
+            (Some(value), _) => bool_value("EXECUTION_ENABLED", &value)?,
+            (None, Some(value)) => bool_value("MCP_EXECUTION_ENABLED", &value)?,
+            (None, None) => false,
         };
         let platform_tenant_id = match get("PLATFORM_TENANT_ID") {
             None => default_platform_tenant_id(),
@@ -85,6 +84,9 @@ impl Config {
             platform_tenant_id,
             catalog_page_size,
             approved_runner_images: comma_list(get("MCP_APPROVED_RUNNER_IMAGES")),
+            // `get` is also consumed by `PackageLimits::from_lookup` below, so hand this
+            // settings block its own borrowing closure instead of moving the shared one.
+            execution: ExecutionSettings::from_lookup(|key| get(key))?,
             packages: PackageLimits::from_lookup(get)?,
         })
     }
@@ -143,6 +145,140 @@ impl PackageLimits {
             return Err(ConfigError::Invalid {
                 name: "MCP_MAX_PACKAGE_FILE_BYTES",
                 reason: "file limit exceeds package limit".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The execution queue, timeout and retention bounds from the reference `Settings`.
+///
+/// Env names are the reference's (`MCP_` prefix, `Settings` in `src/config.py`), and so are the
+/// defaults. The reference validates two cross-setting rules at startup: one tenant's queue
+/// share can never exceed the global queue, and the synchronous wait must end before the
+/// protocol timeout does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutionSettings {
+    /// `MCP_SYNC_WAIT_SECONDS` (0 to 300, default 0): how long a synchronous `tools/call`
+    /// waits inline before handing the run back as a task.
+    pub sync_wait: Duration,
+    /// `MCP_PROTOCOL_TIMEOUT_SECONDS` (greater than 0, at most 360, default 15): one protocol
+    /// round trip.
+    pub protocol_timeout: Duration,
+    /// `MCP_QUEUE_GLOBAL_MAX` (1 to 10000, default 100): runs queued across all tenants.
+    pub queue_global_max: u64,
+    /// `MCP_QUEUE_PER_TENANT_MAX` (1 to 1000, default 20): runs queued for one tenant.
+    pub queue_per_tenant_max: u64,
+    /// `MCP_RUN_QUEUE_TIMEOUT_SECONDS` (1 to 600, default 240): the longest a run may wait.
+    pub run_queue_timeout: Duration,
+    /// `MCP_EXECUTION_RETENTION_DAYS` (1 to 365, default 7): how long a run's payload is kept
+    /// before its result is expired.
+    pub retention_days: u64,
+    /// `MCP_TASK_POLL_INTERVAL_MS` (500 to 60000, default 2000): the poll hint a task returns.
+    pub task_poll_interval_ms: u64,
+    /// `MCP_EXTERNAL_POLL_SECONDS` (1 to 300, default 5): how often an external run's target is
+    /// polled.
+    pub external_poll_seconds: f64,
+    /// `MCP_PROTOCOL_OUTPUT_BYTES` (1 to 8388608, default 2097152): bound on one protocol
+    /// response.
+    pub protocol_output_bytes: usize,
+    /// `MCP_MAX_RESULT_BYTES` (1 to 1048576, default 262144): bound on a stored run result.
+    pub max_result_bytes: usize,
+    /// `MCP_TASKS_ENABLED` (default false): whether the tasks extension is served.
+    pub tasks_enabled: bool,
+}
+
+impl Default for ExecutionSettings {
+    fn default() -> Self {
+        Self {
+            sync_wait: Duration::ZERO,
+            protocol_timeout: Duration::from_secs(15),
+            queue_global_max: 100,
+            queue_per_tenant_max: 20,
+            run_queue_timeout: Duration::from_secs(240),
+            retention_days: 7,
+            task_poll_interval_ms: 2_000,
+            external_poll_seconds: 5.0,
+            protocol_output_bytes: 2_097_152,
+            max_result_bytes: 262_144,
+            tasks_enabled: false,
+        }
+    }
+}
+
+impl ExecutionSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`ExecutionSettings::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let settings = Self {
+            sync_wait: Duration::from_secs_f64(bounded_float_setting(
+                &get,
+                "MCP_SYNC_WAIT_SECONDS",
+                0.0,
+                0.0,
+                300.0,
+            )?),
+            protocol_timeout: Duration::from_secs_f64(float_setting(
+                &get,
+                "MCP_PROTOCOL_TIMEOUT_SECONDS",
+                15.0,
+                0.0,
+                360.0,
+            )?),
+            queue_global_max: u64_setting(&get, "MCP_QUEUE_GLOBAL_MAX", 100, 1, 10_000)?,
+            queue_per_tenant_max: u64_setting(&get, "MCP_QUEUE_PER_TENANT_MAX", 20, 1, 1_000)?,
+            run_queue_timeout: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_RUN_QUEUE_TIMEOUT_SECONDS",
+                240,
+                1,
+                600,
+            )?),
+            retention_days: u64_setting(&get, "MCP_EXECUTION_RETENTION_DAYS", 7, 1, 365)?,
+            task_poll_interval_ms: u64_setting(
+                &get,
+                "MCP_TASK_POLL_INTERVAL_MS",
+                2_000,
+                500,
+                60_000,
+            )?,
+            external_poll_seconds: bounded_float_setting(
+                &get,
+                "MCP_EXTERNAL_POLL_SECONDS",
+                5.0,
+                1.0,
+                300.0,
+            )?,
+            protocol_output_bytes: int_setting(
+                &get,
+                "MCP_PROTOCOL_OUTPUT_BYTES",
+                2_097_152,
+                1,
+                8_388_608,
+            )?,
+            max_result_bytes: int_setting(&get, "MCP_MAX_RESULT_BYTES", 262_144, 1, 1_048_576)?,
+            tasks_enabled: bool_setting(&get, "MCP_TASKS_ENABLED", false)?,
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// The reference's startup cross-checks.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.queue_per_tenant_max > self.queue_global_max {
+            return Err(ConfigError::Invalid {
+                name: "MCP_QUEUE_PER_TENANT_MAX",
+                reason: "per-tenant queue exceeds the global queue".into(),
+            });
+        }
+        if self.sync_wait >= self.protocol_timeout {
+            return Err(ConfigError::Invalid {
+                name: "MCP_SYNC_WAIT_SECONDS",
+                reason: "sync wait must be shorter than the protocol timeout".into(),
             });
         }
         Ok(())
@@ -341,12 +477,21 @@ fn bool_setting(
 ) -> Result<bool, ConfigError> {
     match get(name) {
         None => Ok(default),
-        Some(value) if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
-        Some(value) if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
-        Some(value) => Err(ConfigError::Invalid {
+        Some(value) => bool_value(name, &value),
+    }
+}
+
+/// One boolean setting's accepted spellings: `true`/`false` in any case, and `1`/`0`.
+fn bool_value(name: &'static str, value: &str) -> Result<bool, ConfigError> {
+    if value.eq_ignore_ascii_case("true") || value == "1" {
+        Ok(true)
+    } else if value.eq_ignore_ascii_case("false") || value == "0" {
+        Ok(false)
+    } else {
+        Err(ConfigError::Invalid {
             name,
             reason: format!("{value:?} is not one of true/false/1/0"),
-        }),
+        })
     }
 }
 
@@ -444,6 +589,27 @@ fn float_setting(
             _ => Err(ConfigError::Invalid {
                 name,
                 reason: format!("{value:?} is not a number in ({minimum}, {maximum}]"),
+            }),
+        },
+    }
+}
+
+/// Like [`float_setting`], but with inclusive bounds: a synchronous wait may be exactly zero
+/// and the external poll interval may be exactly its minimum.
+fn bounded_float_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: f64,
+    minimum: f64,
+    maximum: f64,
+) -> Result<f64, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<f64>() {
+            Ok(parsed) if parsed.is_finite() && (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not a number in {minimum}..={maximum}"),
             }),
         },
     }
@@ -674,5 +840,151 @@ mod tests {
             "platform key requires management, which is configured"
         );
         let _ = std::fs::remove_file(key);
+    }
+
+    fn exec_settings(pairs: &[(&str, &str)]) -> Result<ExecutionSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        ExecutionSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn execution_settings_take_reference_defaults_and_env_names() {
+        let defaults = ExecutionSettings::default();
+        assert_eq!(defaults.sync_wait, Duration::ZERO);
+        assert_eq!(defaults.protocol_timeout, Duration::from_secs(15));
+        assert_eq!(defaults.queue_global_max, 100);
+        assert_eq!(defaults.queue_per_tenant_max, 20);
+        assert_eq!(defaults.run_queue_timeout, Duration::from_secs(240));
+        assert_eq!(defaults.retention_days, 7);
+        assert_eq!(defaults.task_poll_interval_ms, 2_000);
+        assert_eq!(defaults.external_poll_seconds, 5.0);
+        assert_eq!(defaults.protocol_output_bytes, 2_097_152);
+        assert_eq!(defaults.max_result_bytes, 262_144);
+        assert!(!defaults.tasks_enabled);
+        assert_eq!(exec_settings(&[]).unwrap(), defaults);
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        assert_eq!(cfg(&base).unwrap().execution, defaults);
+
+        let configured = exec_settings(&[
+            ("MCP_SYNC_WAIT_SECONDS", "2.5"),
+            ("MCP_PROTOCOL_TIMEOUT_SECONDS", "30"),
+            ("MCP_QUEUE_GLOBAL_MAX", "200"),
+            ("MCP_QUEUE_PER_TENANT_MAX", "40"),
+            ("MCP_RUN_QUEUE_TIMEOUT_SECONDS", "120"),
+            ("MCP_EXECUTION_RETENTION_DAYS", "14"),
+            ("MCP_TASK_POLL_INTERVAL_MS", "5000"),
+            ("MCP_EXTERNAL_POLL_SECONDS", "10"),
+            ("MCP_PROTOCOL_OUTPUT_BYTES", "4096"),
+            ("MCP_MAX_RESULT_BYTES", "1024"),
+            ("MCP_TASKS_ENABLED", "true"),
+        ])
+        .unwrap();
+        assert_eq!(configured.sync_wait, Duration::from_millis(2_500));
+        assert_eq!(configured.protocol_timeout, Duration::from_secs(30));
+        assert_eq!(configured.queue_global_max, 200);
+        assert_eq!(configured.queue_per_tenant_max, 40);
+        assert_eq!(configured.run_queue_timeout, Duration::from_secs(120));
+        assert_eq!(configured.retention_days, 14);
+        assert_eq!(configured.task_poll_interval_ms, 5_000);
+        assert_eq!(configured.external_poll_seconds, 10.0);
+        assert_eq!(configured.protocol_output_bytes, 4_096);
+        assert_eq!(configured.max_result_bytes, 1_024);
+        assert!(configured.tasks_enabled);
+    }
+
+    #[test]
+    fn execution_settings_refuse_every_out_of_range_bound() {
+        for (name, value) in [
+            ("MCP_SYNC_WAIT_SECONDS", "-1"),
+            ("MCP_SYNC_WAIT_SECONDS", "300.5"),
+            ("MCP_PROTOCOL_TIMEOUT_SECONDS", "0"),
+            ("MCP_PROTOCOL_TIMEOUT_SECONDS", "361"),
+            ("MCP_QUEUE_GLOBAL_MAX", "0"),
+            ("MCP_QUEUE_GLOBAL_MAX", "10001"),
+            ("MCP_QUEUE_PER_TENANT_MAX", "0"),
+            ("MCP_QUEUE_PER_TENANT_MAX", "1001"),
+            ("MCP_RUN_QUEUE_TIMEOUT_SECONDS", "0"),
+            ("MCP_RUN_QUEUE_TIMEOUT_SECONDS", "601"),
+            ("MCP_EXECUTION_RETENTION_DAYS", "0"),
+            ("MCP_EXECUTION_RETENTION_DAYS", "366"),
+            ("MCP_TASK_POLL_INTERVAL_MS", "499"),
+            ("MCP_TASK_POLL_INTERVAL_MS", "60001"),
+            ("MCP_EXTERNAL_POLL_SECONDS", "0.5"),
+            ("MCP_EXTERNAL_POLL_SECONDS", "301"),
+            ("MCP_PROTOCOL_OUTPUT_BYTES", "0"),
+            ("MCP_PROTOCOL_OUTPUT_BYTES", "8388609"),
+            ("MCP_MAX_RESULT_BYTES", "0"),
+            ("MCP_MAX_RESULT_BYTES", "1048577"),
+            ("MCP_TASKS_ENABLED", "maybe"),
+            ("MCP_QUEUE_GLOBAL_MAX", "many"),
+        ] {
+            assert!(
+                exec_settings(&[(name, value)]).is_err(),
+                "{name}={value} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_settings_cross_check_queue_and_timeouts() {
+        // One tenant can never hold more than the global queue; equality is allowed.
+        assert!(
+            exec_settings(&[
+                ("MCP_QUEUE_GLOBAL_MAX", "10"),
+                ("MCP_QUEUE_PER_TENANT_MAX", "11")
+            ])
+            .is_err()
+        );
+        assert!(
+            exec_settings(&[
+                ("MCP_QUEUE_GLOBAL_MAX", "10"),
+                ("MCP_QUEUE_PER_TENANT_MAX", "10")
+            ])
+            .is_ok()
+        );
+        // The synchronous wait must end before the protocol timeout does; equality is refused.
+        assert!(
+            exec_settings(&[
+                ("MCP_SYNC_WAIT_SECONDS", "15"),
+                ("MCP_PROTOCOL_TIMEOUT_SECONDS", "15")
+            ])
+            .is_err()
+        );
+        assert!(
+            exec_settings(&[
+                ("MCP_SYNC_WAIT_SECONDS", "14.5"),
+                ("MCP_PROTOCOL_TIMEOUT_SECONDS", "15")
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn execution_enabled_accepts_the_prefixed_alias() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        assert!(!cfg(&base).unwrap().execution_enabled, "default off");
+
+        let mut pairs = base.to_vec();
+        pairs.push(("MCP_EXECUTION_ENABLED", "true"));
+        assert!(cfg(&pairs).unwrap().execution_enabled, "alias alone");
+
+        // The unprefixed name is the service's own and wins when both are set.
+        let mut pairs = base.to_vec();
+        pairs.push(("EXECUTION_ENABLED", "false"));
+        pairs.push(("MCP_EXECUTION_ENABLED", "true"));
+        assert!(!cfg(&pairs).unwrap().execution_enabled);
+
+        let mut pairs = base.to_vec();
+        pairs.push(("MCP_EXECUTION_ENABLED", "not-a-bool"));
+        assert_eq!(
+            cfg(&pairs).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_EXECUTION_ENABLED",
+                reason: "\"not-a-bool\" is not one of true/false/1/0".into(),
+            }
+        );
     }
 }

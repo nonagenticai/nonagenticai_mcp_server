@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod execution;
 pub mod mcp;
 pub mod routes;
 pub mod storage;
