@@ -142,8 +142,10 @@ impl Failure {
             EgressError::SsrfBlocked => Self::resolution(error),
             // The reference's pinned backend raises `EgressDeniedError("transport")` before a
             // connection; a *connection* failure inside `PinnedClient::execute` carries the same
-            // variant in this port, so it keeps the reference's retry classification.
-            EgressError::Transport => Self {
+            // variant in this port, so it keeps the reference's retry classification. A failure
+            // after the request may have been sent keeps that classification too (the retry
+            // loop, not the address walk, decides); it is never replayed on another address.
+            EgressError::Transport | EgressError::TransportSent => Self {
                 reason: Some("transport"),
                 egress_reset: None,
                 retry: true,
@@ -1046,8 +1048,12 @@ impl Broker {
                 match client.execute(clone).await {
                     Ok(response) => return Ok(response),
                     // A connection failure may be answered by the next validated address; a
-                    // policy refusal never is.
+                    // policy refusal never is, and neither is a failure after the request may
+                    // have been sent — the retry loop owns that decision.
                     Err(EgressError::Transport) => last = Some(EgressError::Transport),
+                    Err(EgressError::TransportSent) => {
+                        return Err(Failure::transport("transport"));
+                    }
                     Err(error) => return Err(Failure::refused(error)),
                 }
             }

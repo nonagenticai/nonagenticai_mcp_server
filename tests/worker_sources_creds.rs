@@ -742,6 +742,8 @@ fn licence_authority(local: &Local) -> Arc<HttpLicenceAuthority> {
 }
 
 fn build_minter(local: &Local, secret: &Path, gateway: Option<&str>) -> Minter {
+    // Both rustls providers are linked in this test binary; pick one before any client exists.
+    mcp_server_rs::install_crypto_provider();
     Minter::new(
         &minter_settings(&local.base, secret),
         gateway.map(str::to_owned),
@@ -914,6 +916,8 @@ fn resolved(
 }
 
 fn adapters(max_ttl: Duration) -> AuthAdapters {
+    // Both rustls providers are linked in this test binary; pick one before any client exists.
+    mcp_server_rs::install_crypto_provider();
     AuthAdapters::new(reqwest::Client::new(), reqwest::Client::new(), max_ttl)
 }
 

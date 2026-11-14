@@ -470,6 +470,9 @@ impl Lab {
             &settings,
             Arc::new(SystemResolver),
         ));
+        // Both rustls providers are linked in this test binary; pick one before any client
+        // exists rather than relying on reqwest building its TLS config lazily.
+        mcp_server_rs::install_crypto_provider();
         let auth = AuthAdapters::new(
             reqwest::Client::new(),
             reqwest::Client::new(),

@@ -257,6 +257,12 @@ pub enum EgressError {
     /// `transport`: resolution failed, or nothing usable came back.
     #[error("transport")]
     Transport,
+    /// The request may already have reached the upstream: a non-connect transport failure
+    /// (a body write that broke, a reset while awaiting the answer). It is never replayed on
+    /// another validated address — the oracle's pinned backend only walks addresses while
+    /// *connecting*, and replaying a write is the one thing the broker must never do.
+    #[error("transport")]
+    TransportSent,
 }
 
 impl EgressError {
@@ -265,7 +271,7 @@ impl EgressError {
         match self {
             Self::SsrfBlocked => "ssrf_blocked",
             Self::Redirect => "redirect",
-            Self::Transport => "transport",
+            Self::Transport | Self::TransportSent => "transport",
         }
     }
 }
@@ -617,8 +623,12 @@ impl PinnedClient {
         let response = self.client.execute(request).await.map_err(|error| {
             if error.is_redirect() {
                 EgressError::Redirect
-            } else {
+            } else if error.is_connect() {
+                // Nothing reached the upstream, so trying the next validated address is the
+                // reference's `connect_tcp` loop.
                 EgressError::Transport
+            } else {
+                EgressError::TransportSent
             }
         })?;
         if response.status().is_redirection() {
