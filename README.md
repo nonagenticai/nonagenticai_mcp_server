@@ -90,6 +90,14 @@ It does **not** call the private estate archetype, because a public repository c
 reusable workflow in a private repository — the run dies at startup with zero jobs. The same
 reason rules out self-hosted runners: a fork PR can edit `runs-on`.
 
+## Licensing
+
+The code in this repository is Apache-2.0 and needs no licence key to build, test or run.
+It contains no licence-enforcement code today: the executable-catalog port is early and has
+not carried over the licence introspection of the Python implementation it replaces (archived
+at [`nonagenticai/nonagenticai_mcp_server-python-archive`](https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive)).
+Nothing in this repository requires a licence server.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
