@@ -1,0 +1,16 @@
+{
+  "ciphertext": "68Py8c9IVUe+ny9GE4XzsvFKq8vCiLLmxllvwEKtMaO2kzvFajEmDcr3E2VHEhxIYfoKMYO6BDgErA==",
+  "generated_from": "src/sources/crypto.py (encrypt_token, decrypt_token, decode_key)",
+  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "key_padded": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "nonce_bytes": 12,
+  "oracle": {
+    "decrypt": "python-oracle-token-0123456789",
+    "swapped_source_id": "ExecutionDeniedError"
+  },
+  "pin": "22ac1ce4d1b8129a543832b8ed86fe0e1c0c7fe4",
+  "source": "nonagenticai_mcp_server-python-archive",
+  "source_id": "0190a0b0-0000-7000-8000-00000000c001",
+  "token": "python-oracle-token-0123456789",
+  "wrong_source_id": "0190a0b0-0000-7000-8000-00000000c002"
+}

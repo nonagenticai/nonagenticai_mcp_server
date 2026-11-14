@@ -12,3 +12,16 @@
 # its own scan. Everything else is scanned.
 #
 # No entries by default. An empty file that fails the build is the correct starting state.
+
+# Phase 3B (2026-11-14). The executor's security code and its oracle fixtures necessarily spell
+# out the hostnames and addresses they REFUSE — a deny list is the mechanism, so those literals
+# are the test, not a description of this estate. None of these names resolves to our
+# infrastructure: `licences.internal`/`auth.internal` are URL-validation placeholders in unit
+# tests, and the fixture addresses are the IANA shared (100.64/10) and metadata
+# (100.100.100.200) ranges used as "must be blocked" cases. The suffix strings (`.internal`,
+# `x.svc.cluster.local`) are the reference's own tenant deny list.
+src/config.rs:(licences|auth)\.internal
+src/worker/sources.rs:"\.internal",
+src/worker/broker/egress.rs:"\.internal",
+tests/fixtures/phase3b/generate_policy.py:(100\.64\.0\.1|100\.100\.100\.200|db\.internal|x\.svc\.cluster\.local)
+tests/fixtures/phase3b/policy.json:(100\.64\.0\.1|100\.100\.100\.200|db\.internal|x\.svc\.cluster\.local)

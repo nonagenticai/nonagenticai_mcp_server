@@ -3,13 +3,34 @@
 //! trusted-header tenant extractor. `main.rs` is a thin wrapper so integration tests can
 //! build the exact router the binary serves.
 
+pub mod auth;
+pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod execution;
 pub mod mcp;
 pub mod routes;
+pub mod storage;
+pub mod tasks;
 pub mod telemetry;
 pub mod tenant;
+pub mod toolkits;
+pub mod worker;
+
+/// Select the process-level `rustls` provider, once per process.
+///
+/// Both providers end up in the dependency graph — `aws-lc-rs` through kube and reqwest's
+/// `rustls` feature, `ring` through sqlx's TLS — so rustls cannot infer one from its features
+/// and panics on the first `ClientConfig` with "could not automatically determine the
+/// process-level CryptoProvider". Every binary and every test that builds a TLS client calls
+/// this first; installing a provider twice is a no-op error that is deliberately ignored.
+pub fn install_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
 
 use axum::Router;
 use sqlx::PgPool;
@@ -25,12 +46,33 @@ pub struct AppState {
     /// Whether this build can run tools. Reported by the health endpoints; false until the
     /// execution slice lands.
     pub execution_enabled: bool,
+    /// `MCP_LICENSE_APP_KEY`: the gateway application key a binding's credential profile must
+    /// name. Parsed once at startup, from the same [`config::AuthConfig`] the auth layer uses.
+    pub license_app_key: Option<String>,
+    /// `MCP_APPROVED_RUNNER_IMAGES`: the runner image digests a `kata_python` tool may name.
+    pub approved_runner_images: Vec<String>,
+    /// `PLATFORM_TENANT_ID`: the reserved platform tenant that owns platform toolkits.
+    pub platform_tenant_id: auth::Rfc4122Uuid,
+    /// `CATALOG_PAGE_SIZE`: the page bound for `tools/list` and the catalog projection.
+    pub catalog_page_size: u32,
+    /// The `MCP_*` execution queue, timeout and retention bounds.
+    pub execution: config::ExecutionSettings,
 }
 
 /// Document-level OpenAPI metadata. `info` (title, version, description) comes from
 /// Cargo.toml, so renaming the crate renames the spec.
 #[derive(OpenApi)]
-#[openapi(tags((name = "health", description = "Liveness")))]
+#[openapi(
+    tags(
+        (name = "health", description = "Liveness"),
+        (name = "tools", description = "Tenant tool catalog"),
+        (name = "toolkits", description = "Tenant toolkits"),
+        (name = "bindings", description = "Tenant bindings"),
+        (name = "available", description = "Live catalog projection"),
+        (name = "runs", description = "Durable execution runs")
+    ),
+    components(schemas(routes::tools::ValidationError))
+)]
 struct ApiDoc;
 
 /// Every route is registered here, through `routes!`, so the served router and the
@@ -41,6 +83,31 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::health::live))
         .routes(routes!(routes::health::ready))
         .routes(routes!(routes::health::api_health))
+        .routes(routes!(routes::tools::create_tool))
+        .routes(routes!(routes::tools::append_tool))
+        .routes(routes!(routes::tools::definitions))
+        .routes(routes!(routes::tools::inspect))
+        .routes(routes!(routes::tools::validate))
+        .routes(routes!(routes::tools::publish_tool))
+        .routes(routes!(routes::tools::disable_tool))
+        .routes(routes!(routes::tools::retire_tool))
+        .routes(routes!(routes::toolkits::create_toolkit))
+        .routes(routes!(routes::toolkits::append_toolkit))
+        .routes(routes!(routes::toolkits::list_toolkits))
+        .routes(routes!(routes::toolkits::inspect_toolkit))
+        .routes(routes!(routes::toolkits::publish_toolkit))
+        .routes(routes!(routes::toolkits::disable_toolkit))
+        .routes(routes!(routes::bindings::create_binding))
+        .routes(routes!(routes::bindings::inspect_binding))
+        .routes(routes!(routes::bindings::update_binding))
+        .routes(routes!(routes::bindings::rotate_binding))
+        .routes(routes!(routes::bindings::revoke_binding))
+        .routes(routes!(routes::available::available_tools))
+        .routes(routes!(routes::available::effective_tools))
+        .routes(routes!(routes::runs::submit_run))
+        .routes(routes!(routes::runs::inspect_run))
+        .routes(routes!(routes::runs::run_events))
+        .routes(routes!(routes::runs::cancel_run))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.
@@ -50,12 +117,34 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 }
 
 /// The HTTP application the binary serves.
-pub fn app(state: AppState) -> Router {
+///
+/// Authentication settings are read and validated once, before the listener is bound: an
+/// invalid configuration must stop the process rather than serve a `/mcp` surface whose
+/// operator keys or authority are misconfigured (the reference service refuses startup for the
+/// same reasons). The error is returned, never panicked on.
+pub fn app(
+    state: AppState,
+    auth_config: &config::AuthConfig,
+) -> Result<Router, error::StartupError> {
+    // One parse of the authentication settings feeds both the middleware and the state's
+    // gateway application key, so the two can never disagree.
+    let auth = auth::Auth::from_config(auth_config)?;
+    Ok(app_with_auth(state, auth))
+}
+
+/// The same application with an explicit [`auth::Auth`] (tests, and the binary through
+/// [`app`]).
+///
+/// The auth layer is installed here, after every route is registered and before
+/// `with_state`, so it covers `/mcp` and every `/mcp/...` path — including paths no route
+/// knows yet, which the reference middleware also protects.
+pub fn app_with_auth(state: AppState, auth: auth::Auth) -> Router {
     let (router, _) = api_router().split_for_parts();
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
     // envelope, so it is not part of the utoipa OpenAPI document.
     router
-        .route_service("/mcp", mcp::service())
+        .route_service("/mcp", mcp::service(&state))
+        .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

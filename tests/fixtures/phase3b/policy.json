@@ -1,0 +1,2139 @@
+{
+  "constraints": [
+    {
+      "accepted": true,
+      "arguments": {
+        "value": "bound"
+      },
+      "context": {
+        "bound": "bound"
+      },
+      "name": "context_equal_accepted",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": "other"
+      },
+      "context": {
+        "bound": "bound"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "context_equal_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": true
+      },
+      "context": {
+        "bound": 1
+      },
+      "error": "ExecutionDeniedError",
+      "name": "context_bool_is_not_int",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": 1
+      },
+      "context": {
+        "bound": 1.0
+      },
+      "error": "ExecutionDeniedError",
+      "name": "context_int_is_not_float",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        }
+      ]
+    },
+    {
+      "arguments": {},
+      "context": {
+        "bound": "bound"
+      },
+      "error": "ValueError",
+      "name": "context_missing_argument",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": "bound"
+      },
+      "context": {},
+      "error": "ValueError",
+      "name": "context_missing_context",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": 1
+      },
+      "context": {},
+      "name": "set_member",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "set_membership",
+          "values": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": true
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "set_bool_is_not_member",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "set_membership",
+          "values": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": 3
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "set_non_member",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "set_membership",
+          "values": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": 2
+      },
+      "context": {},
+      "name": "number_in_bounds",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": 2.5
+      },
+      "context": {},
+      "name": "number_float_in_bounds",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": true
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "number_bool_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": 9
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "number_above_bounds",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": "2"
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "number_string_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": 9007199254740992
+      },
+      "context": {},
+      "name": "number_2_53_boundary_accepted",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 9007199254740992.0,
+          "minimum": -9007199254740992.0
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": 9007199254740993
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "number_above_2_53_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 9007199254740992.0,
+          "minimum": -9007199254740992.0
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": -9007199254740993
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "number_below_2_53_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 9007199254740992.0,
+          "minimum": -9007199254740992.0
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": "src/file.py"
+      },
+      "context": {},
+      "name": "path_under_root",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "relative_path",
+          "root": "src"
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": "src"
+      },
+      "context": {},
+      "name": "path_is_root",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "relative_path",
+          "root": "src"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": "src-other/file.py"
+      },
+      "context": {},
+      "error": "ExecutionDeniedError",
+      "name": "path_sibling_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "relative_path",
+          "root": "src"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": "src/../escape.py"
+      },
+      "context": {},
+      "error": "ValueError",
+      "name": "path_traversal_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "relative_path",
+          "root": "src"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": "/src/file.py"
+      },
+      "context": {},
+      "error": "ValueError",
+      "name": "path_absolute_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "relative_path",
+          "root": "src"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": 1
+      },
+      "context": {},
+      "error": "AttributeError",
+      "name": "path_non_string_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "kind": "relative_path",
+          "root": "src"
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "subject": "s-1"
+      },
+      "context": {
+        "owner": "t-1"
+      },
+      "name": "ownership_accepted",
+      "ownership_calls": [
+        {
+          "arguments": {
+            "subject": "s-1"
+          },
+          "reference": "01900000-0000-7000-8000-000000000003"
+        }
+      ],
+      "ownership_result": {
+        "owner": "t-1"
+      },
+      "rules": [
+        {
+          "argument": "/subject",
+          "context": "/owner",
+          "kind": "ownership_read",
+          "operation": {
+            "id": "01900000-0000-7000-8000-000000000003",
+            "version": 1
+          },
+          "result": "/owner"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "subject": "s-1"
+      },
+      "context": {
+        "owner": "t-2"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "ownership_mismatch_refused",
+      "ownership_calls": [
+        {
+          "arguments": {
+            "subject": "s-1"
+          },
+          "reference": "01900000-0000-7000-8000-000000000003"
+        }
+      ],
+      "ownership_result": {
+        "owner": "t-1"
+      },
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/subject",
+          "context": "/owner",
+          "kind": "ownership_read",
+          "operation": {
+            "id": "01900000-0000-7000-8000-000000000003",
+            "version": 1
+          },
+          "result": "/owner"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "subject": "s-1"
+      },
+      "context": {
+        "owner": "t-1"
+      },
+      "error": "ValueError",
+      "name": "ownership_missing_result_refused",
+      "ownership_calls": [
+        {
+          "arguments": {
+            "subject": "s-1"
+          },
+          "reference": "01900000-0000-7000-8000-000000000003"
+        }
+      ],
+      "ownership_result": {
+        "other": "t-1"
+      },
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/subject",
+          "context": "/owner",
+          "kind": "ownership_read",
+          "operation": {
+            "id": "01900000-0000-7000-8000-000000000003",
+            "version": 1
+          },
+          "result": "/owner"
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "subject": "s-1"
+      },
+      "context": {},
+      "error": "ValueError",
+      "name": "ownership_missing_context_refused",
+      "ownership_calls": [
+        {
+          "arguments": {
+            "subject": "s-1"
+          },
+          "reference": "01900000-0000-7000-8000-000000000003"
+        }
+      ],
+      "ownership_result": {
+        "owner": "t-1"
+      },
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/subject",
+          "context": "/owner",
+          "kind": "ownership_read",
+          "operation": {
+            "id": "01900000-0000-7000-8000-000000000003",
+            "version": 1
+          },
+          "result": "/owner"
+        }
+      ]
+    },
+    {
+      "accepted": true,
+      "arguments": {
+        "value": 1
+      },
+      "context": {
+        "bound": 1
+      },
+      "name": "conjunction_accepted",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        },
+        {
+          "argument": "/value",
+          "kind": "set_membership",
+          "values": [
+            1,
+            2
+          ]
+        },
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    },
+    {
+      "arguments": {
+        "value": 1
+      },
+      "context": {
+        "bound": 2
+      },
+      "error": "ExecutionDeniedError",
+      "name": "conjunction_refused",
+      "ownership_calls": [],
+      "ownership_result": null,
+      "refused": true,
+      "rules": [
+        {
+          "argument": "/value",
+          "context": "/bound",
+          "kind": "context_equal"
+        },
+        {
+          "argument": "/value",
+          "kind": "numeric_bounds",
+          "maximum": 3.0,
+          "minimum": 1.0
+        }
+      ]
+    }
+  ],
+  "egress": {
+    "addresses": [
+      {
+        "address": "127.0.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "127.1.2.3",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "10.0.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "172.16.5.4",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "192.168.1.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "169.254.169.254",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "169.254.170.2",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "100.64.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "100.100.100.200",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "192.0.0.192",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "0.0.0.0",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "224.0.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "239.255.255.250",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "240.0.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "255.255.255.255",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "198.18.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "192.0.2.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "::",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "fe80::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "fe80::1%eth0",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "fc00::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "fd00:ec2::254",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "ff02::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "::ffff:127.0.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "::ffff:10.1.2.3",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "::ffff:169.254.169.254",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "::127.0.0.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "64:ff9b::7f00:1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "64:ff9b::a9fe:a9fe",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "2002:7f00:1::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "2002:a9fe:a9fe::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "2002:0a00:0001::",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "2001:db8::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "100::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "fec0::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "febf::1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "192.88.99.1",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "192.88.99.255",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "64:ff9b::c058:6301",
+        "allowed": false,
+        "deny": []
+      },
+      {
+        "address": "8.8.8.8",
+        "allowed": true,
+        "deny": []
+      },
+      {
+        "address": "1.1.1.1",
+        "allowed": true,
+        "deny": []
+      },
+      {
+        "address": "93.184.216.34",
+        "allowed": true,
+        "deny": []
+      },
+      {
+        "address": "2606:4700:4700::1111",
+        "allowed": true,
+        "deny": []
+      },
+      {
+        "address": "2a00:1450:4001::1",
+        "allowed": true,
+        "deny": []
+      },
+      {
+        "address": "8.8.8.8",
+        "allowed": false,
+        "deny": [
+          "8.8.8.0/24"
+        ]
+      },
+      {
+        "address": "2606:4700:4700::1111",
+        "allowed": false,
+        "deny": [
+          "2606:4700::/32"
+        ]
+      },
+      {
+        "address": "1.1.1.1",
+        "allowed": true,
+        "deny": [
+          "8.8.8.0/24"
+        ]
+      },
+      {
+        "address": "::ffff:8.8.8.8",
+        "allowed": false,
+        "deny": [
+          "8.8.8.0/24"
+        ]
+      }
+    ],
+    "embedded": [
+      {
+        "address": "::ffff:8.8.8.8",
+        "embedded": [
+          "8.8.8.8"
+        ]
+      },
+      {
+        "address": "::ffff:127.0.0.1",
+        "embedded": [
+          "127.0.0.1"
+        ]
+      },
+      {
+        "address": "64:ff9b::7f00:1",
+        "embedded": [
+          "127.0.0.1"
+        ]
+      },
+      {
+        "address": "2002:7f00:1::1",
+        "embedded": [
+          "127.0.0.1"
+        ]
+      },
+      {
+        "address": "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "embedded": [
+          "65.54.227.120",
+          "192.0.2.45"
+        ]
+      },
+      {
+        "address": "8.8.8.8",
+        "embedded": []
+      }
+    ],
+    "hostnames": [
+      {
+        "accepted": false,
+        "host": "localhost"
+      },
+      {
+        "accepted": false,
+        "host": "app.localhost"
+      },
+      {
+        "accepted": false,
+        "host": "127.0.0.1"
+      },
+      {
+        "accepted": false,
+        "host": "[::1]"
+      },
+      {
+        "accepted": false,
+        "host": "2130706433"
+      },
+      {
+        "accepted": false,
+        "host": "0x7f.1"
+      },
+      {
+        "accepted": false,
+        "host": "intranet"
+      },
+      {
+        "accepted": false,
+        "host": "printer.local"
+      },
+      {
+        "accepted": false,
+        "host": "db.internal"
+      },
+      {
+        "accepted": false,
+        "host": "api.svc"
+      },
+      {
+        "accepted": false,
+        "host": "x.cluster.local"
+      },
+      {
+        "accepted": false,
+        "host": "x.svc.cluster.local"
+      },
+      {
+        "accepted": false,
+        "host": ""
+      },
+      {
+        "accepted": false,
+        "host": "a..b.com"
+      },
+      {
+        "accepted": false,
+        "host": "-bad.example.com"
+      },
+      {
+        "accepted": false,
+        "host": "under_score.example.com"
+      },
+      {
+        "accepted": false,
+        "host": "u@h.example.com"
+      },
+      {
+        "accepted": true,
+        "host": "API.Example.com.",
+        "normalized": "api.example.com"
+      }
+    ]
+  },
+  "limits": {
+    "accepted": [
+      {
+        "limits": [
+          {
+            "calls_per_minute": 1,
+            "concurrency": 2,
+            "service_id": "01900000-0000-7000-8000-000000000006",
+            "tenant_id": "01900000-0000-7000-8000-000000000004"
+          },
+          {
+            "calls_per_minute": 5,
+            "concurrency": 3,
+            "service_id": "01900000-0000-7000-8000-000000000006",
+            "tenant_id": null
+          },
+          {
+            "calls_per_minute": 7,
+            "concurrency": 4,
+            "service_id": "01900000-0000-7000-8000-000000000007",
+            "tenant_id": "01900000-0000-7000-8000-000000000004"
+          }
+        ],
+        "name": "accepted_table",
+        "payload": {
+          "limits": [
+            {
+              "calls_per_minute": 1,
+              "concurrency": 2,
+              "service_id": "01900000-0000-7000-8000-000000000006",
+              "tenant_id": "01900000-0000-7000-8000-000000000004"
+            },
+            {
+              "calls_per_minute": 5,
+              "concurrency": 3,
+              "service_id": "01900000-0000-7000-8000-000000000006"
+            },
+            {
+              "calls_per_minute": 7,
+              "concurrency": 4,
+              "service_id": "01900000-0000-7000-8000-000000000007",
+              "tenant_id": "01900000-0000-7000-8000-000000000004"
+            }
+          ],
+          "schema_version": 1
+        }
+      },
+      {
+        "limits": [],
+        "name": "accepted_empty",
+        "payload": {
+          "schema_version": 1
+        }
+      }
+    ],
+    "ceilings": [
+      {
+        "calls": 100,
+        "concurrency": 10,
+        "expected": [
+          1,
+          2
+        ],
+        "name": "tenant_specific_narrows",
+        "service": "01900000-0000-7000-8000-000000000006",
+        "tenant": "01900000-0000-7000-8000-000000000004"
+      },
+      {
+        "calls": 100,
+        "concurrency": 10,
+        "expected": [
+          5,
+          3
+        ],
+        "name": "global_entry_narrows",
+        "service": "01900000-0000-7000-8000-000000000006",
+        "tenant": "01900000-0000-7000-8000-000000000005"
+      },
+      {
+        "calls": 100,
+        "concurrency": 10,
+        "expected": [
+          7,
+          4
+        ],
+        "name": "other_service",
+        "service": "01900000-0000-7000-8000-000000000007",
+        "tenant": "01900000-0000-7000-8000-000000000004"
+      },
+      {
+        "calls": 100,
+        "concurrency": 10,
+        "expected": [
+          100,
+          10
+        ],
+        "name": "unlisted_service",
+        "service": "01900000-0000-7000-8000-000000000008",
+        "tenant": "01900000-0000-7000-8000-000000000004"
+      }
+    ],
+    "oversized": {
+      "error": "too_large",
+      "fill": "x",
+      "length": 262145
+    },
+    "refused": [
+      {
+        "bytes": "{\"schema_version\": 2, \"limits\": []}",
+        "error": "invalid",
+        "name": "schema_version_two"
+      },
+      {
+        "bytes": "{\"schema_version\": 1, \"limits\": [], \"url\": \"https://evil.example\"}",
+        "error": "invalid",
+        "name": "extra_field"
+      },
+      {
+        "bytes": "{\"schema_version\": 1, \"limits\": [{\"service_id\": \"01900000-0000-7000-8000-000000000006\", \"calls_per_minute\": 2, \"concurrency\": 1}, {\"service_id\": \"01900000-0000-7000-8000-000000000006\", \"calls_per_minute\": 2, \"concurrency\": 1}]}",
+        "error": "duplicate",
+        "name": "duplicate_identity"
+      },
+      {
+        "bytes": "{\"schema_version\": 1, \"limits\": [{\"service_id\": \"01900000-0000-7000-8000-000000000006\", \"calls_per_minute\": 0, \"concurrency\": 1}]}",
+        "error": "invalid",
+        "name": "calls_out_of_range"
+      },
+      {
+        "bytes": "{\"schema_version\": 1, \"limits\": [{\"service_id\": \"01900000-0000-7000-8000-000000000006\", \"calls_per_minute\": 2, \"concurrency\": 101}]}",
+        "error": "invalid",
+        "name": "concurrency_out_of_range"
+      },
+      {
+        "bytes": "{\"schema_version\": 1, \"limits\": [{\"service_id\": \"01900000-0000-7000-8000-000000000006\", \"calls_per_minute\": \"5\", \"concurrency\": 1}]}",
+        "error": "invalid",
+        "name": "wrong_type"
+      },
+      {
+        "bytes": "{\"schema_version\": 1.0, \"limits\": []}",
+        "error": "invalid",
+        "name": "float_type"
+      },
+      {
+        "bytes": "{\"schema_version\": 1, \"limits\": [{\"service_id\": \"01900000-0000-7000-8000-000000000006\", \"calls_per_minute\": 2, \"concurrency\": 1, \"url\": \"https://evil.example\"}]}",
+        "error": "invalid",
+        "name": "nested_extra_field"
+      }
+    ]
+  },
+  "operations": {
+    "create": {
+      "effect": "writes",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [
+        {
+          "location": "body",
+          "optional": false,
+          "target": "/nested",
+          "value": {
+            "pointer": "/body",
+            "source": "input"
+          }
+        },
+        {
+          "location": "body",
+          "optional": false,
+          "target": "/name",
+          "value": {
+            "source": "literal",
+            "value": "fixed"
+          }
+        }
+      ],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "POST",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/records",
+      "query_fields": [],
+      "redact_fields": [],
+      "response_projection": [
+        "/ok"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "empty_projection": {
+      "effect": "read_only",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "GET",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/x",
+      "query_fields": [],
+      "redact_fields": [],
+      "response_projection": [
+        ""
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "escaped_body": {
+      "effect": "writes",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [
+        {
+          "location": "path",
+          "optional": false,
+          "target": "record",
+          "value": {
+            "pointer": "/id",
+            "source": "input"
+          }
+        },
+        {
+          "location": "body",
+          "optional": false,
+          "target": "/a~1b/c~0d",
+          "value": {
+            "pointer": "/value",
+            "source": "input"
+          }
+        }
+      ],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "POST",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/records/{record}",
+      "query_fields": [],
+      "redact_fields": [],
+      "response_projection": [
+        "/ok"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "missing_projection": {
+      "effect": "read_only",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "GET",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/x",
+      "query_fields": [],
+      "redact_fields": [],
+      "response_projection": [
+        "/absent"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "optional": {
+      "effect": "read_only",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [
+        {
+          "location": "query",
+          "optional": false,
+          "target": "q",
+          "value": {
+            "pointer": "/q",
+            "source": "input"
+          }
+        },
+        {
+          "location": "query",
+          "optional": true,
+          "target": "limit",
+          "value": {
+            "pointer": "/limit",
+            "source": "input"
+          }
+        }
+      ],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "GET",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/search",
+      "query_fields": [
+        "q",
+        "limit"
+      ],
+      "redact_fields": [],
+      "response_projection": [
+        "/ok"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "projection": {
+      "effect": "read_only",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "GET",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/x",
+      "query_fields": [],
+      "redact_fields": [
+        "/a/b/key",
+        "/nothing/here",
+        "/c/0",
+        "/map/a~1b"
+      ],
+      "response_projection": [
+        "/a/b",
+        "/c"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "records": {
+      "effect": "read_only",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [
+        "x_version"
+      ],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [
+        {
+          "location": "path",
+          "optional": false,
+          "target": "record",
+          "value": {
+            "pointer": "/id",
+            "source": "input"
+          }
+        },
+        {
+          "location": "query",
+          "optional": false,
+          "target": "limit",
+          "value": {
+            "pointer": "/limit",
+            "source": "input"
+          }
+        },
+        {
+          "location": "query",
+          "optional": false,
+          "target": "flag",
+          "value": {
+            "pointer": "/flag",
+            "source": "input"
+          }
+        },
+        {
+          "location": "query",
+          "optional": false,
+          "target": "ratio",
+          "value": {
+            "pointer": "/ratio",
+            "source": "input"
+          }
+        },
+        {
+          "location": "header",
+          "optional": false,
+          "target": "x_version",
+          "value": {
+            "pointer": "/version",
+            "source": "context"
+          }
+        }
+      ],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "GET",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/records/{record}",
+      "query_fields": [
+        "limit",
+        "flag",
+        "ratio"
+      ],
+      "redact_fields": [
+        "/records/0/token"
+      ],
+      "response_projection": [
+        "/records"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "redact_empty": {
+      "effect": "read_only",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "GET",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/x",
+      "query_fields": [],
+      "redact_fields": [
+        ""
+      ],
+      "response_projection": [
+        "/ok"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    },
+    "whole_body": {
+      "effect": "writes",
+      "empty_response": false,
+      "expected_error_statuses": [],
+      "header_fields": [],
+      "idempotency": "none",
+      "input_schema": {},
+      "mappings": [
+        {
+          "location": "body",
+          "optional": false,
+          "target": "",
+          "value": {
+            "pointer": "/body",
+            "source": "input"
+          }
+        }
+      ],
+      "max_response_bytes": 1024,
+      "max_retries": 0,
+      "method": "POST",
+      "operation_id": "01900000-0000-7000-8000-000000000001",
+      "output_schema": {},
+      "pagination_limit": 10,
+      "path_template": "/raw",
+      "query_fields": [],
+      "redact_fields": [],
+      "response_projection": [
+        "/ok"
+      ],
+      "schema_version": 1,
+      "scope_rules": [],
+      "service": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "version": 1
+      },
+      "timeout_seconds": 5,
+      "version": 1
+    }
+  },
+  "oracle": "nonagenticai_mcp_server-python-archive@22ac1ce4",
+  "projection": [
+    {
+      "expected": {
+        "records": [
+          {
+            "id": 1
+          }
+        ]
+      },
+      "name": "projection_and_redaction",
+      "operation": "records",
+      "value": {
+        "hidden": "secret",
+        "records": [
+          {
+            "id": 1,
+            "token": "secret"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "a": {
+          "b": {
+            "keep": 1
+          }
+        },
+        "c": [
+          null,
+          "text"
+        ]
+      },
+      "name": "projection_nested_and_array_redaction",
+      "operation": "projection",
+      "value": {
+        "a": {
+          "b": {
+            "keep": 1,
+            "key": "secret"
+          }
+        },
+        "c": [
+          {
+            "token": "secret"
+          },
+          "text"
+        ],
+        "hidden": "secret",
+        "map": {
+          "a/b": "secret",
+          "other": 1
+        }
+      }
+    },
+    {
+      "error": "ValueError",
+      "name": "projection_absent_refused",
+      "operation": "missing_projection",
+      "refused": true,
+      "value": {
+        "ok": 1
+      }
+    },
+    {
+      "expected": {
+        "anything": [
+          1,
+          2
+        ]
+      },
+      "name": "projection_empty_whole_value",
+      "operation": "empty_projection",
+      "value": {
+        "anything": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "error": "ExecutionDeniedError",
+      "name": "redact_empty_refused",
+      "operation": "redact_empty",
+      "refused": true,
+      "value": {
+        "ok": 1
+      }
+    }
+  ],
+  "transport": [
+    {
+      "arguments": {
+        "flag": true,
+        "id": "abc",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "expected": {
+        "body": null,
+        "headers": {
+          "x-version": "v1"
+        },
+        "path": "/records/abc",
+        "query": {
+          "flag": "True",
+          "limit": "5",
+          "ratio": "1.5"
+        }
+      },
+      "name": "record_happy",
+      "operation": "records"
+    },
+    {
+      "arguments": {
+        "flag": false,
+        "id": "abc",
+        "limit": true,
+        "ratio": 1.0
+      },
+      "context": {
+        "version": "v1"
+      },
+      "expected": {
+        "body": null,
+        "headers": {
+          "x-version": "v1"
+        },
+        "path": "/records/abc",
+        "query": {
+          "flag": "False",
+          "limit": "True",
+          "ratio": "1.0"
+        }
+      },
+      "name": "record_number_rendering",
+      "operation": "records"
+    },
+    {
+      "arguments": {
+        "flag": false,
+        "id": "caf\u00e9 \u2615",
+        "limit": 1,
+        "ratio": 0.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "expected": {
+        "body": null,
+        "headers": {
+          "x-version": "v1"
+        },
+        "path": "/records/caf%C3%A9%20%E2%98%95",
+        "query": {
+          "flag": "False",
+          "limit": "1",
+          "ratio": "0.5"
+        }
+      },
+      "name": "record_percent_encoding",
+      "operation": "records"
+    },
+    {
+      "arguments": {
+        "flag": false,
+        "id": "a.b-c_d~e",
+        "limit": 1,
+        "ratio": 0.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "expected": {
+        "body": null,
+        "headers": {
+          "x-version": "v1"
+        },
+        "path": "/records/a.b-c_d~e",
+        "query": {
+          "flag": "False",
+          "limit": "1",
+          "ratio": "0.5"
+        }
+      },
+      "name": "record_unreserved_path_value",
+      "operation": "records"
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": ".",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_dot",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "..",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_dotdot",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_empty",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "evil/path",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_slash",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "%2f",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_percent",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "a\\b",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_backslash",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "a?b",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_question",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "a#b",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_fragment",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "\r\nInjected",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_control",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "\u0001",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_control_unit",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": {
+          "id": "object"
+        },
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_object",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": null,
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_null",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": [
+          1
+        ],
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ExecutionDeniedError",
+      "name": "path_list",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "abc",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {
+        "version": {
+          "nested": true
+        }
+      },
+      "error": "ExecutionDeniedError",
+      "name": "header_object_refused",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "id": "abc"
+      },
+      "context": {
+        "version": "v1"
+      },
+      "error": "ValueError",
+      "name": "missing_required_input",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "flag": true,
+        "id": "abc",
+        "limit": 5,
+        "ratio": 1.5
+      },
+      "context": {},
+      "error": "ValueError",
+      "name": "missing_context",
+      "operation": "records",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "q": "x"
+      },
+      "context": {},
+      "expected": {
+        "body": null,
+        "headers": {},
+        "path": "/search",
+        "query": {
+          "q": "x"
+        }
+      },
+      "name": "optional_absent",
+      "operation": "optional"
+    },
+    {
+      "arguments": {
+        "limit": 3,
+        "q": "x"
+      },
+      "context": {},
+      "expected": {
+        "body": null,
+        "headers": {},
+        "path": "/search",
+        "query": {
+          "limit": "3",
+          "q": "x"
+        }
+      },
+      "name": "optional_present",
+      "operation": "optional"
+    },
+    {
+      "arguments": {
+        "limit": 3
+      },
+      "context": {},
+      "error": "ValueError",
+      "name": "required_query_missing",
+      "operation": "optional",
+      "refused": true
+    },
+    {
+      "arguments": {
+        "body": {
+          "ok": true
+        }
+      },
+      "context": {},
+      "expected": {
+        "body": {
+          "name": "fixed",
+          "nested": {
+            "ok": true
+          }
+        },
+        "headers": {},
+        "path": "/records",
+        "query": {}
+      },
+      "name": "literal_and_body",
+      "operation": "create"
+    },
+    {
+      "arguments": {
+        "body": [
+          1,
+          2
+        ]
+      },
+      "context": {},
+      "expected": {
+        "body": {
+          "name": "fixed",
+          "nested": [
+            1,
+            2
+          ]
+        },
+        "headers": {},
+        "path": "/records",
+        "query": {}
+      },
+      "name": "body_object_refused",
+      "operation": "create"
+    },
+    {
+      "arguments": {
+        "body": {
+          "any": "json"
+        }
+      },
+      "context": {},
+      "expected": {
+        "body": {
+          "any": "json"
+        },
+        "headers": {},
+        "path": "/raw",
+        "query": {}
+      },
+      "name": "whole_body_object",
+      "operation": "whole_body"
+    },
+    {
+      "arguments": {
+        "body": [
+          1,
+          2
+        ]
+      },
+      "context": {},
+      "expected": {
+        "body": [
+          1,
+          2
+        ],
+        "headers": {},
+        "path": "/raw",
+        "query": {}
+      },
+      "name": "whole_body_list",
+      "operation": "whole_body"
+    },
+    {
+      "arguments": {
+        "body": "text"
+      },
+      "context": {},
+      "expected": {
+        "body": "text",
+        "headers": {},
+        "path": "/raw",
+        "query": {}
+      },
+      "name": "whole_body_scalar",
+      "operation": "whole_body"
+    },
+    {
+      "arguments": {
+        "id": "abc",
+        "value": 7
+      },
+      "context": {},
+      "expected": {
+        "body": {
+          "a/b": {
+            "c~d": 7
+          }
+        },
+        "headers": {},
+        "path": "/records/abc",
+        "query": {}
+      },
+      "name": "body_pointer_escaping",
+      "operation": "escaped_body"
+    }
+  ]
+}

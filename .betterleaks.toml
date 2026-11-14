@@ -242,3 +242,14 @@ regexes = [
 description = "n8n flow fixtures: 'key' is a process key with an s13. prefix, not a credential"
 paths = ['''^fixtures/[abc]\.flow\.json$''']
 regexes = ['''"key"\s*:\s*"s13\.[^"]*"''']
+
+# Repo-specific: the phase 3B credential fixture is a *test vector* for the source-token
+# cipher. Its key is the 32 bytes 00..1f base64url-encoded, and its plaintext is
+# `python-oracle-token-0123456789` — both produced by the pinned oracle's own
+# `crypto.encrypt_token` so the Rust decryptor is checked against the reference. Neither
+# string authenticates to anything; the ciphertext is meaningless without the same test key.
+# The regex is the exact literal, so a real token pasted into the same file is still flagged.
+[[allowlists]]
+description = "phase3b source-crypto test vector: sequential test key, synthetic token"
+paths = ['''^tests/fixtures/phase3b/crypto\.json$''']
+regexes = ['''"key(_padded)?"\s*:\s*"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=?"''']

@@ -92,10 +92,13 @@ reason rules out self-hosted runners: a fork PR can edit `runs-on`.
 
 ## Licensing
 
-The code here is Apache-2.0 and needs no licence key to build, test or run. This server
-performs **no licence enforcement**: it trusts the `X-Tenant-Id` header the trusted edge
-injects (see `src/tenant.rs`) and never calls a licensing service, so a clone with no licence
-infrastructure behaves exactly like the deployed instance.
+The code in this repository is Apache-2.0 and needs no licence key to build, test or run.
+It contains no licence-enforcement code today: the executable-catalog port is early and has
+not carried over the licence introspection of the Python implementation it replaces (archived
+at [`nonagenticai/nonagenticai_mcp_server-python-archive`](https://github.com/nonagenticai/nonagenticai_mcp_server-python-archive)).
+The server trusts the `X-Tenant-Id` header the trusted edge injects (see `src/tenant.rs`) and
+never calls a licensing service, so a clone with no licence infrastructure behaves exactly like
+the deployed instance.
 
 The platform's licence gate is optional and lives in two separate public repositories —
 [`licenses`](https://github.com/nonagenticai/licenses) (entitlements, plans and tokens) and
