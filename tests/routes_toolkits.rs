@@ -184,6 +184,11 @@ impl Fixture {
                 execution_enabled: false,
                 license_app_key: Some("synthetic".to_owned()),
                 approved_runner_images: Vec::new(),
+                platform_tenant_id: mcp_server_rs::auth::Rfc4122Uuid::parse(
+                    "01900000-0000-7000-8000-00000000f001",
+                )
+                .expect("static uuid"),
+                catalog_page_size: 10,
             },
             auth(),
         )

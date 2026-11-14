@@ -34,6 +34,10 @@ pub struct AppState {
     pub license_app_key: Option<String>,
     /// `MCP_APPROVED_RUNNER_IMAGES`: the runner image digests a `kata_python` tool may name.
     pub approved_runner_images: Vec<String>,
+    /// `PLATFORM_TENANT_ID`: the reserved platform tenant that owns platform toolkits.
+    pub platform_tenant_id: auth::Rfc4122Uuid,
+    /// `CATALOG_PAGE_SIZE`: the page bound for `tools/list` and the catalog projection.
+    pub catalog_page_size: u32,
 }
 
 /// Document-level OpenAPI metadata. `info` (title, version, description) comes from
@@ -115,7 +119,7 @@ pub fn app_with_auth(state: AppState, auth: auth::Auth) -> Router {
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
     // envelope, so it is not part of the utoipa OpenAPI document.
     router
-        .route_service("/mcp", mcp::service())
+        .route_service("/mcp", mcp::service(&state))
         .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

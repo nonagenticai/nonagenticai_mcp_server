@@ -127,7 +127,7 @@ impl CatalogResolver {
 
     /// The reference's `CatalogRepository.generation`: the catalog's monotonic generation.
     /// A missing row is storage drift, not a request error.
-    async fn generation(&self) -> Result<i64, CatalogStoreError> {
+    pub(crate) async fn generation(&self) -> Result<i64, CatalogStoreError> {
         let generation: Option<i64> =
             sqlx::query_scalar("SELECT generation FROM public.mcp_catalog_state WHERE singleton")
                 .fetch_optional(&self.pool)

@@ -71,6 +71,8 @@ async fn serve() -> Result<(), StartupError> {
                 execution_enabled: cfg.execution_enabled,
                 license_app_key: auth_config.license_app_key.clone(),
                 approved_runner_images: cfg.approved_runner_images.clone(),
+                platform_tenant_id: cfg.platform_tenant_id,
+                catalog_page_size: cfg.catalog_page_size,
             },
             &auth_config,
         )?,

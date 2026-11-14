@@ -157,22 +157,17 @@ fn projection(state: &AppState, tools: &[ResolvedTool]) -> Response {
 
 /// The live resolver for this request. The toolkit service carries the configured gateway
 /// application key because `effective` re-validates the binding's credential profile.
-fn resolver(state: &AppState) -> CatalogResolver {
+pub(crate) fn resolver(state: &AppState) -> CatalogResolver {
     CatalogResolver::new(
         state.pool.clone(),
         ToolkitService::new(
             state.pool.clone(),
             SelectionResolver {
-                platform_tenant_id: platform_tenant(),
+                platform_tenant_id: AuthorityId::new(state.platform_tenant_id.to_string())
+                    .expect("the configured platform tenant is an RFC 4122 UUID"),
             },
             state.license_app_key.clone(),
         ),
         state.approved_runner_images.clone(),
     )
-}
-
-/// The reserved platform tenant that owns platform toolkits.
-fn platform_tenant() -> AuthorityId {
-    AuthorityId::new(crate::config::default_platform_tenant_id().to_string())
-        .expect("the default platform tenant is an RFC 4122 UUID")
 }
