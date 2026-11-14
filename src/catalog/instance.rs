@@ -19,6 +19,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use serde::Serialize;
 use serde_json::{Number, Value};
 
 use crate::catalog::error::CatalogError;
@@ -30,7 +31,10 @@ pub const MAX_PROBLEMS: usize = 20;
 
 /// One refusal: the JSON pointer to the failing value and the keyword that refused it. The
 /// pointed-to value itself is never included.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` is for the protocol surface only: `tools/call` answers an invalid instance with
+/// `{"error": "invalid_arguments", "problems": [...]}`, exactly the reference's `json.dumps`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Problem {
     pub path: String,
     pub rule: String,
