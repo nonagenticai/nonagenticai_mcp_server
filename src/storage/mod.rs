@@ -5,5 +5,6 @@
 //! there is no row-level security and no session variable, exactly as the reference.
 
 pub mod catalog;
+pub mod toolkits;
 
 pub use catalog::{AppendRequest, CatalogRepository, CatalogStoreError, ToolDefinition};

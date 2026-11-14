@@ -29,6 +29,11 @@ pub struct Config {
     /// Reported by `/health` and `/health/ready`; the deployment sets it true only when the
     /// execution slice is live.
     pub execution_enabled: bool,
+    /// `PLATFORM_TENANT_ID` (optional): the reserved platform tenant that owns platform
+    /// toolkits and their tools.
+    pub platform_tenant_id: Rfc4122Uuid,
+    /// `CATALOG_PAGE_SIZE` (optional, default 10, 1 to 100): the management catalog page bound.
+    pub catalog_page_size: u32,
     /// The `MCP_MAX_PACKAGE_*` bounds a submitted tool package is validated against.
     pub packages: PackageLimits,
 }
@@ -61,11 +66,21 @@ impl Config {
                 });
             }
         };
+        let platform_tenant_id = match get("PLATFORM_TENANT_ID") {
+            None => default_platform_tenant_id(),
+            Some(v) => Rfc4122Uuid::parse(v.trim()).ok_or_else(|| ConfigError::Invalid {
+                name: "PLATFORM_TENANT_ID",
+                reason: format!("{v:?} is not an RFC 4122 UUID"),
+            })?,
+        };
+        let catalog_page_size = u32_setting(&get, "CATALOG_PAGE_SIZE", 10, 1, 100)?;
         Ok(Self {
             database_url,
             database_migrate_url: get("DATABASE_MIGRATE_URL"),
             bind_addr,
             execution_enabled,
+            platform_tenant_id,
+            catalog_page_size,
             packages: PackageLimits::from_lookup(get)?,
         })
     }
@@ -335,6 +350,31 @@ fn int_setting(
             }),
         },
     }
+}
+
+fn u32_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: u32,
+    minimum: u32,
+    maximum: u32,
+) -> Result<u32, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<u32>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+/// The reference's reserved platform tenant, the owner of platform toolkits.
+fn default_platform_tenant_id() -> Rfc4122Uuid {
+    Rfc4122Uuid::parse("01900000-0000-7000-8000-00000000f001")
+        .expect("the default platform tenant is a valid RFC 4122 UUID")
 }
 
 fn positive_int_setting(
