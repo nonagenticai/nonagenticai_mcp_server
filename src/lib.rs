@@ -12,6 +12,7 @@ pub mod execution;
 pub mod mcp;
 pub mod routes;
 pub mod storage;
+pub mod tasks;
 pub mod telemetry;
 pub mod tenant;
 pub mod toolkits;

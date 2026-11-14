@@ -335,8 +335,18 @@ impl BindingAuthority for FixedBindings {
 }
 
 pub fn admin_key_file() -> PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("mcp-routes-available-admin-{}", std::process::id()));
+    // One file per call: tests in one binary run on several threads, and a shared path is
+    // truncated and rewritten under a concurrent reader (which then sees an empty key).
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "mcp-routes-available-admin-{}-{nanos}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&path, ADMIN_KEY).expect("write operator key");
     path
 }

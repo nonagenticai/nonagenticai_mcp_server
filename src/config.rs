@@ -186,6 +186,12 @@ pub struct ExecutionSettings {
     pub max_result_bytes: usize,
     /// `MCP_TASKS_ENABLED` (default false): whether the tasks extension is served.
     pub tasks_enabled: bool,
+    /// `FR_APPROVAL_WAIT_SECONDS` (60 to 86400, default 900): how long an fr approval may wait
+    /// before the activity feed raises `approval_waiting`. Advisory: it never changes the run.
+    pub fr_approval_wait_seconds: u64,
+    /// `FR_PHASE_STALL_SECONDS` (60 to 604800, default 3600): how long an fr phase may stand
+    /// still before the feed raises `phase_stalled`. Advisory, like the wait threshold.
+    pub fr_phase_stall_seconds: u64,
 }
 
 impl Default for ExecutionSettings {
@@ -202,6 +208,8 @@ impl Default for ExecutionSettings {
             protocol_output_bytes: 2_097_152,
             max_result_bytes: 262_144,
             tasks_enabled: false,
+            fr_approval_wait_seconds: 900,
+            fr_phase_stall_seconds: 3_600,
         }
     }
 }
@@ -262,6 +270,22 @@ impl ExecutionSettings {
             )?,
             max_result_bytes: int_setting(&get, "MCP_MAX_RESULT_BYTES", 262_144, 1, 1_048_576)?,
             tasks_enabled: bool_setting(&get, "MCP_TASKS_ENABLED", false)?,
+            // The two fr signal thresholds carry explicit unprefixed aliases in the reference
+            // (`src/config.py:198-203`), so they are read unprefixed here too.
+            fr_approval_wait_seconds: u64_setting(
+                &get,
+                "FR_APPROVAL_WAIT_SECONDS",
+                900,
+                60,
+                86_400,
+            )?,
+            fr_phase_stall_seconds: u64_setting(
+                &get,
+                "FR_PHASE_STALL_SECONDS",
+                3_600,
+                60,
+                604_800,
+            )?,
         };
         settings.validate()?;
         Ok(settings)
