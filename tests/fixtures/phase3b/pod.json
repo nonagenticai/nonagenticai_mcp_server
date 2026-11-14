@@ -1,0 +1,111 @@
+{
+  "authority": {
+    "context": "{}",
+    "effective": "{\"limits\": {\"wall_seconds\": 120, \"queue_seconds\": 60, \"memory_mi\": 1024, \"cpu_millicores\": 1000, \"api_calls\": 10, \"frame_bytes\": 65536, \"output_bytes\": 262144}}",
+    "manifest": "{\"schema_version\":1,\"tool_id\":\"20000000-0000-7000-8000-000000000001\",\"tenant_id\":\"10000000-0000-7000-8000-000000000001\",\"version\":1,\"public_name\":\"phase3b_runner\",\"operation\":\"phase3b.runner\",\"description\":\"Phase 3b Kata pod manifest fixture\",\"runtime\":\"kata_python\",\"target\":null,\"entrypoint\":\"package/main.py\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"context_schema\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"package_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"runner_image_digest\":\"registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"allowed_operations\":[],\"operation_constraints\":[],\"limits\":{\"wall_seconds\":120,\"queue_seconds\":60,\"memory_mi\":1024,\"cpu_millicores\":1000,\"api_calls\":10,\"frame_bytes\":65536,\"output_bytes\":262144},\"effect\":\"read_only\"}"
+  },
+  "fence": 3,
+  "generated_from": "src/execution/kata.py (pod_manifest, pod_name)",
+  "limits": {
+    "api_calls": 10,
+    "cpu_millicores": 1000,
+    "frame_bytes": 65536,
+    "memory_mi": 1024,
+    "output_bytes": 262144,
+    "queue_seconds": 60,
+    "wall_seconds": 120
+  },
+  "pin": "22ac1ce4d1b8129a543832b8ed86fe0e1c0c7fe4",
+  "pod": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/managed-by": "mcp-executor",
+        "mcp.fence": "3",
+        "mcp.run-id": "0190b0b0-0000-7000-8000-0000000b0001"
+      },
+      "name": "mcp-0190b0b00000700080000000000b0001-3",
+      "namespace": "mcp-runs"
+    },
+    "spec": {
+      "activeDeadlineSeconds": 120,
+      "automountServiceAccountToken": false,
+      "containers": [
+        {
+          "image": "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "imagePullPolicy": "IfNotPresent",
+          "name": "runner",
+          "resources": {
+            "limits": {
+              "cpu": "500m",
+              "ephemeral-storage": "64Mi",
+              "memory": "512Mi"
+            },
+            "requests": {
+              "cpu": "250m",
+              "memory": "256Mi"
+            }
+          },
+          "securityContext": {
+            "allowPrivilegeEscalation": false,
+            "capabilities": {
+              "drop": [
+                "ALL"
+              ]
+            },
+            "readOnlyRootFilesystem": true
+          },
+          "stdin": true,
+          "stdinOnce": true,
+          "tty": false,
+          "volumeMounts": [
+            {
+              "mountPath": "/scratch",
+              "name": "scratch"
+            }
+          ]
+        }
+      ],
+      "enableServiceLinks": false,
+      "restartPolicy": "Never",
+      "runtimeClassName": "kata-qemu",
+      "securityContext": {
+        "fsGroup": 1000,
+        "runAsGroup": 1000,
+        "runAsNonRoot": true,
+        "runAsUser": 1000,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "terminationGracePeriodSeconds": 1,
+      "volumes": [
+        {
+          "emptyDir": {
+            "medium": "Memory",
+            "sizeLimit": "32Mi"
+          },
+          "name": "scratch"
+        }
+      ]
+    }
+  },
+  "run_id": "0190b0b0-0000-7000-8000-0000000b0001",
+  "settings": {
+    "approved_runner_images": [
+      "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "registry.example/other@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "kata_runtime_class": "kata-qemu",
+    "run_cpu_limit": 500,
+    "run_cpu_request": 250,
+    "run_max_seconds": 90,
+    "run_memory_limit_mi": 512,
+    "run_memory_request_mi": 256,
+    "run_namespace": "mcp-runs",
+    "run_start_timeout_seconds": 30,
+    "runner_image_digest": "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "source": "nonagenticai_mcp_server-python-archive"
+}

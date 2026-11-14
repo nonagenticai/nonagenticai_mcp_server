@@ -28,6 +28,20 @@ pub trait LicenceAuthority: Send + Sync {
         &'a self,
         token: &'a str,
     ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>>;
+
+    /// Introspect `token` as a licence for a specific application key — the reference's
+    /// `LicenseClient.authenticate(token, app_key)` (`licenses.py:98-160`), which the broker
+    /// uses for a minted credential (`broker/client.py:136,180`). The default answers as
+    /// [`Self::authenticate`] does (the configured key); the HTTP client always sends and
+    /// verifies the key it is given.
+    fn authenticate_for_app<'a>(
+        &'a self,
+        token: &'a str,
+        app_key: &'a str,
+    ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
+        let _ = app_key;
+        self.authenticate(token)
+    }
 }
 
 /// Authentication is not configured: every attempt fails closed with 503.
@@ -79,8 +93,8 @@ impl HttpLicenceAuthority {
         })
     }
 
-    /// Validate one introspection payload exactly as the reference client does.
-    fn parse(&self, info: &Value) -> Result<LicenseIdentity, AuthError> {
+    /// Validate one introspection payload exactly as the reference client does, for `app_key`.
+    fn parse(&self, info: &Value, app_key: &str) -> Result<LicenseIdentity, AuthError> {
         let info = info.as_object().ok_or(AuthError::Unauthorized)?;
         if info.get("active") != Some(&Value::Bool(true)) {
             return Err(AuthError::Unauthorized);
@@ -89,7 +103,7 @@ impl HttpLicenceAuthority {
             .get("app")
             .and_then(Value::as_object)
             .ok_or(AuthError::Unauthorized)?;
-        if app.get("key").and_then(Value::as_str) != Some(self.app_key.as_str()) {
+        if app.get("key").and_then(Value::as_str) != Some(app_key) {
             return Err(AuthError::Unauthorized);
         }
         let tenant_id = info
@@ -150,10 +164,12 @@ fn expiry(value: &Value) -> Result<Option<i64>, AuthError> {
     }
 }
 
-impl LicenceAuthority for HttpLicenceAuthority {
-    fn authenticate<'a>(
+impl HttpLicenceAuthority {
+    /// `POST {"token": …, "app": app_key}` to the configured introspection endpoint.
+    fn introspect<'a>(
         &'a self,
         token: &'a str,
+        app_key: &'a str,
     ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
         Box::pin(async move {
             if !(1..=4096).contains(&token.len())
@@ -164,7 +180,7 @@ impl LicenceAuthority for HttpLicenceAuthority {
             let mut response = self
                 .client
                 .post(&self.url)
-                .json(&serde_json::json!({ "token": token, "app": self.app_key }))
+                .json(&serde_json::json!({ "token": token, "app": app_key }))
                 .send()
                 .await
                 .map_err(|_| AuthError::Unavailable)?;
@@ -185,7 +201,24 @@ impl LicenceAuthority for HttpLicenceAuthority {
                 }
             }
             let info: Value = serde_json::from_slice(&body).map_err(|_| AuthError::Unauthorized)?;
-            self.parse(&info)
+            self.parse(&info, app_key)
         })
+    }
+}
+
+impl LicenceAuthority for HttpLicenceAuthority {
+    fn authenticate<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
+        self.introspect(token, &self.app_key)
+    }
+
+    fn authenticate_for_app<'a>(
+        &'a self,
+        token: &'a str,
+        app_key: &'a str,
+    ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
+        self.introspect(token, app_key)
     }
 }

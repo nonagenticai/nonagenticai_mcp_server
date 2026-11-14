@@ -16,6 +16,21 @@ pub mod tasks;
 pub mod telemetry;
 pub mod tenant;
 pub mod toolkits;
+pub mod worker;
+
+/// Select the process-level `rustls` provider, once per process.
+///
+/// Both providers end up in the dependency graph — `aws-lc-rs` through kube and reqwest's
+/// `rustls` feature, `ring` through sqlx's TLS — so rustls cannot infer one from its features
+/// and panics on the first `ClientConfig` with "could not automatically determine the
+/// process-level CryptoProvider". Every binary and every test that builds a TLS client calls
+/// this first; installing a provider twice is a no-op error that is deliberately ignored.
+pub fn install_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
 
 use axum::Router;
 use sqlx::PgPool;

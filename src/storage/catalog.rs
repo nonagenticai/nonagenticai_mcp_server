@@ -423,6 +423,42 @@ impl CatalogRepository {
         Ok((manifest, parse_status(&status)?))
     }
 
+    /// `CatalogRepository.service_owner`: the platform tenant or the authoring tenant that owns a
+    /// service identity. The broker resolves a source as `(owner, destination_alias)`, so the
+    /// owner is what keeps a tenant source from serving a platform service.
+    pub async fn service_owner(
+        &self,
+        service_id: &Uuid7,
+    ) -> Result<AuthorityId, CatalogStoreError> {
+        let owner: Option<String> = sqlx::query_scalar(
+            "SELECT owner_tenant_id::text FROM public.mcp_services WHERE service_id = $1::uuid",
+        )
+        .bind(service_id.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        let owner = owner.ok_or(CatalogStoreError::NotFound("service not found"))?;
+        AuthorityId::new(owner).map_err(|_| CatalogStoreError::Corrupt("service owner"))
+    }
+
+    /// `CatalogRepository.may_use_service`: the rule the database enforces on tool versions —
+    /// own services, granted platform services, and licence-kind platform services. The broker
+    /// re-checks it per call.
+    pub async fn may_use_service(
+        &self,
+        tenant_id: &AuthorityId,
+        reference: &ExactReference,
+    ) -> Result<bool, CatalogStoreError> {
+        let allowed: Option<bool> = sqlx::query_scalar(
+            "SELECT public.mcp_tenant_may_use_service($1::uuid,$2::uuid,$3) AS ok",
+        )
+        .bind(tenant_id.as_str())
+        .bind(reference.id.as_str())
+        .bind(version_bits(reference.version))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(allowed.unwrap_or(false))
+    }
+
     /// One exact platform service version and its status.
     pub async fn service(
         &self,
