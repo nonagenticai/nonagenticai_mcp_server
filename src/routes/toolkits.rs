@@ -395,6 +395,10 @@ fn service(state: &AppState) -> ToolkitService {
         SelectionResolver {
             platform_tenant_id: platform_tenant(),
         },
+        // These six routes write and read toolkit manifests; none of them validates a
+        // credential profile, so the gateway application key is not consulted here. The
+        // binding routes pass the configured `MCP_LICENSE_APP_KEY`.
+        None,
     )
 }
 

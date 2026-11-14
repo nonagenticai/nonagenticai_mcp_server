@@ -22,22 +22,26 @@ use mcp_server_rs::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
 use mcp_server_rs::catalog::lifecycle::VersionStatus;
 use mcp_server_rs::catalog::models::{Attribution, ToolManifest};
 use mcp_server_rs::catalog::package::PackageFile;
-use mcp_server_rs::catalog::toolkit_models::{ToolkitDescriptor, ToolkitManifest};
+use mcp_server_rs::catalog::toolkit_models::{BindingSpec, ToolkitDescriptor, ToolkitManifest};
 use mcp_server_rs::db;
 use mcp_server_rs::storage::bindings;
 use mcp_server_rs::storage::catalog::{CatalogRepository, CatalogStoreError};
 use mcp_server_rs::toolkits::resolver::SelectionResolver;
-use mcp_server_rs::toolkits::service::ToolkitService;
+use mcp_server_rs::toolkits::service::{ToolkitService, ToolkitServiceError};
 
 const TENANT_A: &str = "10000000-0000-7000-8000-000000000001";
 const TENANT_B: &str = "10000000-0000-7000-8000-000000000002";
 const TENANT_PLATFORM: &str = "10000000-0000-7000-8000-0000000000ff";
 const LICENSE: &str = "30000000-0000-4000-8000-000000000001";
 const OTHER_LICENSE: &str = "30000000-0000-4000-8000-000000000002";
+const SERVICE_ID: &str = "30000000-0000-7000-8000-0000000000ff";
+const OPERATION_ALPHA: &str = "40000000-0000-7000-8000-000000000001";
 const TOOL_ALPHA: &str = "20000000-0000-7000-8000-000000000001";
 const TOOL_ZETA: &str = "20000000-0000-7000-8000-000000000002";
 const TOOLKIT_1: &str = "01900000-0000-7000-8000-000000000001";
 const PROFILE: &str = "01900000-0000-7000-8000-0000000000f1";
+const PROFILE_2: &str = "01900000-0000-7000-8000-0000000000f2";
+const PROJECT: &str = "01900000-0000-7000-8000-0000000000c1";
 const BINDING: &str = "01900000-0000-7000-8000-0000000000b1";
 const BINDING_REVOKED: &str = "01900000-0000-7000-8000-0000000000b2";
 const BINDING_DISABLED: &str = "01900000-0000-7000-8000-0000000000b3";
@@ -187,6 +191,7 @@ impl Fixture {
             SelectionResolver {
                 platform_tenant_id: authority(TENANT_PLATFORM),
             },
+            Some("synthetic".to_owned()),
         )
     }
 
@@ -336,20 +341,29 @@ async fn seed_toolkit(fixture: &Fixture, tools: &[(&str, &str)]) -> ToolkitDescr
         .expect("create toolkit")
 }
 
-/// A credential profile the binding may reference, with its gateway reference row.
-async fn insert_profile(fixture: &Fixture) {
+/// A credential profile row and its reference rows, gateway reference included.
+///
+/// `services` is the profile's service-reference array; the gateway reference is always the
+/// row the binding runtime reads first.
+async fn insert_profile_with(
+    fixture: &Fixture,
+    profile: &str,
+    name: &str,
+    gateway_license: &str,
+    services: Value,
+) {
     let manifest = json!({
         "schema_version": 1,
         "tenant_id": TENANT_A,
-        "profile_id": PROFILE,
-        "name": "synthetic_profile",
+        "profile_id": profile,
+        "name": name,
         "gateway": {
             "service": "gateway",
             "alias": "gateway",
-            "license_id": LICENSE,
+            "license_id": gateway_license,
             "app_key": "synthetic"
         },
-        "services": []
+        "services": services
     });
     let mut tx = fixture.pool.begin().await.expect("transaction");
     sqlx::query(
@@ -358,8 +372,8 @@ async fn insert_profile(fixture: &Fixture) {
          VALUES ($1::uuid,$2::uuid,$3,$4,$5,$5)",
     )
     .bind(TENANT_A)
-    .bind(PROFILE)
-    .bind("synthetic_profile")
+    .bind(profile)
+    .bind(name)
     .bind(manifest)
     .bind(actor_snapshot())
     .execute(&mut *tx)
@@ -371,15 +385,225 @@ async fn insert_profile(fixture: &Fixture) {
          VALUES ($1::uuid,$2::uuid,$3,$4,$5::uuid,$6)",
     )
     .bind(TENANT_A)
-    .bind(PROFILE)
+    .bind(profile)
     .bind("__gateway")
     .bind("gateway")
-    .bind(LICENSE)
+    .bind(gateway_license)
     .bind("synthetic")
     .execute(&mut *tx)
     .await
     .expect("insert gateway reference");
+    for service in services.as_array().expect("service references") {
+        sqlx::query(
+            "INSERT INTO public.mcp_credential_refs(\
+             tenant_id,profile_id,service_key,alias,license_id,app_key) \
+             VALUES ($1::uuid,$2::uuid,$3,$4,$5::uuid,$6)",
+        )
+        .bind(TENANT_A)
+        .bind(profile)
+        .bind(service["service"].as_str().expect("service key"))
+        .bind(service["alias"].as_str().expect("alias"))
+        .bind(service["license_id"].as_str().expect("licence"))
+        .bind(service["app_key"].as_str().expect("application key"))
+        .execute(&mut *tx)
+        .await
+        .expect("insert service reference");
+    }
     tx.commit().await.expect("commit credential profile");
+}
+
+/// A credential profile the binding may reference: gateway only, no service references.
+async fn insert_profile(fixture: &Fixture) {
+    insert_profile_with(fixture, PROFILE, "synthetic_profile", LICENSE, json!([])).await;
+}
+
+/// The service reference the synthetic service requires.
+fn service_references() -> Value {
+    json!([{
+        "service": "synthetic_service",
+        "alias": "synthetic",
+        "license_id": LICENSE,
+        "app_key": "synthetic"
+    }])
+}
+
+/// A published platform service whose runner authenticates with a licence bearer.
+async fn seed_service(fixture: &Fixture) {
+    sqlx::query(
+        "INSERT INTO public.mcp_services(service_id,service_key,created_by) \
+         VALUES ($1::uuid,'synthetic_service',$2)",
+    )
+    .bind(SERVICE_ID)
+    .bind(actor_snapshot())
+    .execute(&fixture.pool)
+    .await
+    .expect("service identity");
+    sqlx::query(
+        "INSERT INTO public.mcp_service_versions(service_id,version,manifest,created_by,updated_by) \
+         VALUES ($1::uuid,1,$2,$3,$3)",
+    )
+    .bind(SERVICE_ID)
+    .bind(json!({
+        "schema_version": 1,
+        "service_id": SERVICE_ID,
+        "version": 1,
+        "service_key": "synthetic_service",
+        "destination_alias": "synthetic_destination",
+        "license_app_key": "synthetic",
+        "auth_adapter": "license_bearer",
+        "credential_profile_key": "synthetic_profile",
+        "max_request_bytes": 4096,
+        "max_response_bytes": 4096,
+    }))
+    .bind(actor_snapshot())
+    .execute(&fixture.pool)
+    .await
+    .expect("service version");
+    sqlx::query(
+        "UPDATE public.mcp_service_versions SET status='published' \
+         WHERE service_id = $1::uuid AND version = 1",
+    )
+    .bind(SERVICE_ID)
+    .execute(&fixture.pool)
+    .await
+    .expect("publish service");
+}
+
+/// A published operation of the synthetic service.
+async fn seed_operation(fixture: &Fixture, operation: &str) {
+    sqlx::query(
+        "INSERT INTO public.mcp_operation_versions(operation_id,version,service_id,\
+         service_version,manifest,created_by,updated_by) VALUES ($1::uuid,1,$2::uuid,1,$3,$4,$4)",
+    )
+    .bind(operation)
+    .bind(SERVICE_ID)
+    .bind(json!({
+        "schema_version": 1,
+        "operation_id": operation,
+        "version": 1,
+        "service": {"id": SERVICE_ID, "version": 1},
+        "method": "GET",
+        "path_template": "/synthetic",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "output_schema": {"type": "object"},
+        "response_projection": ["/id"],
+        "scope_rules": [],
+        "mappings": [],
+        "effect": "read_only",
+        "timeout_seconds": 30,
+        "pagination_limit": 100,
+        "max_response_bytes": 4096
+    }))
+    .bind(actor_snapshot())
+    .execute(&fixture.pool)
+    .await
+    .expect("operation version");
+    sqlx::query(
+        "UPDATE public.mcp_operation_versions SET status='published' \
+         WHERE operation_id = $1::uuid AND version = 1",
+    )
+    .bind(operation)
+    .execute(&fixture.pool)
+    .await
+    .expect("publish operation");
+}
+
+/// A strict tool manifest whose single operation is `operation`, allowed exactly once.
+fn tool_manifest_with_operation(name: &str, tool: &str, operation: &str) -> ToolManifest {
+    serde_json::from_value(json!({
+        "schema_version": 1,
+        "tool_id": tool,
+        "tenant_id": TENANT_A,
+        "version": 1,
+        "public_name": name,
+        "operation": format!("synthetic.{name}"),
+        "description": "Synthetic fixture",
+        "runtime": "n8n_workflow",
+        "target": {"kind": "n8n_workflow", "webhook_path": "synthetic/hook"},
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "result_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "context_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "package_sha256": "a".repeat(64),
+        "effect": "read_only",
+        "allowed_operations": [{"id": operation, "version": 1}],
+    }))
+    .expect("valid tool manifest")
+}
+
+/// The full binding fixture: a published service and operation, a published tool that allows
+/// the operation, and one published toolkit selecting that tool.
+async fn published_binding_toolkit(
+    fixture: &Fixture,
+    tool: &str,
+    name: &str,
+    operation: &str,
+) -> ToolkitDescriptor {
+    seed_service(fixture).await;
+    seed_operation(fixture, operation).await;
+    let manifest = tool_manifest_with_operation(name, tool, operation);
+    let repository = fixture.repository();
+    let tenant = authority(TENANT_A);
+    repository
+        .create(&tenant, &manifest, &files(), &actor())
+        .await
+        .expect("create tool");
+    repository
+        .transition(
+            &tenant,
+            &uuid7(tool),
+            version(1),
+            VersionStatus::Published,
+            &actor(),
+            version(1),
+        )
+        .await
+        .expect("publish tool");
+    let service = fixture.service();
+    let operator = principal(TENANT_A, true);
+    let drafted = service
+        .write(&operator, &toolkit_manifest(&[(tool, name)]), None)
+        .await
+        .expect("create toolkit");
+    service
+        .transition(
+            &operator,
+            &uuid7(TOOLKIT_1),
+            version(1),
+            VersionStatus::Published,
+            drafted.revision,
+        )
+        .await
+        .expect("publish toolkit")
+}
+
+/// A binding spec pinning the synthetic toolkit.
+fn binding_spec(profile: &str, expires_at: &str, context: Value) -> BindingSpec {
+    serde_json::from_value(json!({
+        "schema_version": 1,
+        "credential_profile_id": profile,
+        "toolkits": [{"id": TOOLKIT_1, "version": 1, "tenant_id": TENANT_A}],
+        "context": context,
+        "expires_at": expires_at,
+    }))
+    .expect("valid binding spec")
+}
+
+fn tenant_context() -> Value {
+    json!({"tenant_id": TENANT_A})
+}
+
+fn invalid_error(error: ToolkitServiceError) -> &'static str {
+    match error {
+        ToolkitServiceError::Invalid(message) => message,
+        other => panic!("expected invalid, got {other:?}"),
+    }
+}
+
+fn conflict_error(error: ToolkitServiceError) -> &'static str {
+    match error {
+        ToolkitServiceError::Conflict(message) => message,
+        other => panic!("expected conflict, got {other:?}"),
+    }
 }
 
 /// One raw `mcp_bindings` row, as a test case varies it.
@@ -812,4 +1036,447 @@ fn mint_token_is_43_url_safe_characters_and_unique() {
     );
     assert_ne!(one, two);
     assert_eq!(bindings::digest_token(&one).len(), 64);
+}
+
+// ── the binding service (`ToolkitService` binding write/action/effective) ───────────────────
+
+#[tokio::test]
+async fn create_returns_a_descriptor_and_a_token_and_records_the_selection() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    let toolkit =
+        published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let spec = binding_spec(PROFILE, FUTURE, tenant_context());
+    let (descriptor, token) = service
+        .binding_write(&principal(TENANT_A, true), &spec, None, None)
+        .await
+        .expect("create binding");
+    let token = token.expect("a create mints a token");
+    assert_eq!(descriptor.revision.get(), 1);
+    assert!(!descriptor.revoked);
+    assert_eq!(descriptor.gateway_license_id.as_str(), LICENSE);
+    assert_eq!(descriptor.tools, toolkit.tools);
+    assert_eq!(token.len(), 43);
+    assert!(
+        token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
+        "URL-safe base64 without padding: {token}"
+    );
+
+    let mut conn = fixture.pool.acquire().await.expect("connection");
+    let stored: String = sqlx::query_scalar(
+        "SELECT token_sha256 FROM public.mcp_bindings \
+         WHERE tenant_id = $1::uuid AND binding_id = $2::uuid",
+    )
+    .bind(TENANT_A)
+    .bind(descriptor.binding_id.as_str())
+    .fetch_one(&mut *conn)
+    .await
+    .expect("binding row");
+    assert_eq!(stored, bindings::digest_token(&token));
+    assert_eq!(stored.len(), 64);
+    let leaked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public.mcp_bindings b WHERE strpos(to_jsonb(b)::text, $1) > 0",
+    )
+    .bind(&token)
+    .fetch_one(&mut *conn)
+    .await
+    .expect("plaintext scan");
+    assert_eq!(leaked, 0, "the token itself is stored in no column");
+    let toolkits: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public.mcp_binding_toolkits \
+         WHERE tenant_id = $1::uuid AND binding_id = $2::uuid",
+    )
+    .bind(TENANT_A)
+    .bind(descriptor.binding_id.as_str())
+    .fetch_one(&mut *conn)
+    .await
+    .expect("toolkit rows");
+    assert_eq!(toolkits, 1);
+    let tools: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public.mcp_binding_tools \
+         WHERE tenant_id = $1::uuid AND binding_id = $2::uuid",
+    )
+    .bind(TENANT_A)
+    .bind(descriptor.binding_id.as_str())
+    .fetch_one(&mut *conn)
+    .await
+    .expect("tool rows");
+    assert_eq!(tools, 1);
+    let (action, revision): (String, i64) = sqlx::query_as(
+        "SELECT action, revision FROM public.mcp_access_events WHERE entity_id = $1::uuid",
+    )
+    .bind(descriptor.binding_id.as_str())
+    .fetch_one(&mut *conn)
+    .await
+    .expect("audit row");
+    assert_eq!(action, "binding.changed");
+    assert_eq!(revision, 1);
+    drop(conn);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn create_refuses_an_expiry_in_the_past() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let refused = fixture
+        .service()
+        .binding_write(
+            &principal(TENANT_A, true),
+            &binding_spec(PROFILE, PAST, tenant_context()),
+            None,
+            None,
+        )
+        .await
+        .expect_err("an expired binding cannot be created");
+    assert_eq!(
+        invalid_error(refused),
+        "binding expiry must be in the future"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn create_refuses_a_context_beyond_tenant_scope() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let context = json!({"tenant_id": TENANT_A, "project_id": PROJECT});
+    let refused = fixture
+        .service()
+        .binding_write(
+            &principal(TENANT_A, true),
+            &binding_spec(PROFILE, FUTURE, context),
+            None,
+            None,
+        )
+        .await
+        .expect_err("only tenant scope is self-verifying");
+    assert_eq!(
+        invalid_error(refused),
+        "resource and stage context requires host ownership/provenance verification"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn update_requires_an_expected_revision() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let operator = principal(TENANT_A, true);
+    let spec = binding_spec(PROFILE, FUTURE, tenant_context());
+    let (descriptor, _) = service
+        .binding_write(&operator, &spec, None, None)
+        .await
+        .expect("create binding");
+    let refused = service
+        .binding_write(&operator, &spec, Some(descriptor.binding_id.clone()), None)
+        .await
+        .expect_err("an update names its revision");
+    assert_eq!(
+        invalid_error(refused),
+        "binding updates require an expected revision"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn update_refuses_a_changed_gateway_licence() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    insert_profile_with(
+        &fixture,
+        PROFILE_2,
+        "synthetic_profile_two",
+        OTHER_LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let operator = principal(TENANT_A, true);
+    let (descriptor, _) = service
+        .binding_write(
+            &operator,
+            &binding_spec(PROFILE, FUTURE, tenant_context()),
+            None,
+            None,
+        )
+        .await
+        .expect("create binding");
+    let refused = service
+        .binding_write(
+            &operator,
+            &binding_spec(PROFILE_2, FUTURE, tenant_context()),
+            Some(descriptor.binding_id.clone()),
+            Some(descriptor.revision),
+        )
+        .await
+        .expect_err("the gateway licence is immutable");
+    assert_eq!(
+        invalid_error(refused),
+        "gateway license identity is immutable; issue a new binding"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn update_refuses_a_stale_expected_revision() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let operator = principal(TENANT_A, true);
+    let spec = binding_spec(PROFILE, FUTURE, tenant_context());
+    let (descriptor, _) = service
+        .binding_write(&operator, &spec, None, None)
+        .await
+        .expect("create binding");
+    let refused = service
+        .binding_write(
+            &operator,
+            &spec,
+            Some(descriptor.binding_id.clone()),
+            Some(version(2)),
+        )
+        .await
+        .expect_err("the identity is still at revision one");
+    assert_eq!(conflict_error(refused), "expected revision conflict");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn rotate_issues_a_new_token_and_the_old_one_stops_authenticating() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let operator = principal(TENANT_A, true);
+    let (descriptor, token) = service
+        .binding_write(
+            &operator,
+            &binding_spec(PROFILE, FUTURE, tenant_context()),
+            None,
+            None,
+        )
+        .await
+        .expect("create binding");
+    let old = token.expect("a create mints a token");
+    let (rotated, token) = service
+        .binding_action(
+            &operator,
+            &descriptor.binding_id,
+            descriptor.revision,
+            false,
+        )
+        .await
+        .expect("rotate");
+    let new = token.expect("a rotate mints a token");
+    assert_ne!(new, old);
+    assert_eq!(rotated.revision.get(), 2);
+    assert!(!rotated.revoked);
+
+    let binding_authority = PgBindingAuthority::new(fixture.pool.clone());
+    assert_eq!(
+        binding_authority
+            .authenticate(&license_identity(LICENSE), &old)
+            .await,
+        Err(AuthError::Unauthorized),
+        "the rotated token no longer authenticates"
+    );
+    let resolved = binding_authority
+        .authenticate(&license_identity(LICENSE), &new)
+        .await
+        .expect("the new token authenticates");
+    assert_eq!(resolved.revision, 2);
+    drop(binding_authority);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn revoke_is_terminal() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let operator = principal(TENANT_A, true);
+    let (descriptor, token) = service
+        .binding_write(
+            &operator,
+            &binding_spec(PROFILE, FUTURE, tenant_context()),
+            None,
+            None,
+        )
+        .await
+        .expect("create binding");
+    let old = token.expect("a create mints a token");
+    let (revoked, token) = service
+        .binding_action(&operator, &descriptor.binding_id, descriptor.revision, true)
+        .await
+        .expect("revoke");
+    assert!(token.is_none(), "a revoke mints no token");
+    assert!(revoked.revoked);
+    assert_eq!(revoked.revision.get(), 2);
+
+    let binding_authority = PgBindingAuthority::new(fixture.pool.clone());
+    assert_eq!(
+        binding_authority
+            .authenticate(&license_identity(LICENSE), &old)
+            .await,
+        Err(AuthError::Unauthorized)
+    );
+    drop(binding_authority);
+
+    let refused = service
+        .binding_action(&operator, &revoked.binding_id, revoked.revision, false)
+        .await
+        .expect_err("a revoked binding cannot rotate");
+    assert_eq!(conflict_error(refused), "binding is revoked");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn effective_returns_the_stored_tools_and_refuses_a_changed_selection() {
+    let fixture = Fixture::new().await;
+    insert_profile_with(
+        &fixture,
+        PROFILE,
+        "synthetic_profile",
+        LICENSE,
+        service_references(),
+    )
+    .await;
+    let toolkit =
+        published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let service = fixture.service();
+    let (descriptor, _) = service
+        .binding_write(
+            &principal(TENANT_A, true),
+            &binding_spec(PROFILE, FUTURE, tenant_context()),
+            None,
+            None,
+        )
+        .await
+        .expect("create binding");
+    let effective = service.effective(&descriptor).await.expect("effective");
+    assert_eq!(effective, descriptor.tools);
+    assert_eq!(effective, toolkit.tools);
+
+    // Mutate the stored tools row (and its members, which the deferred check pairs) so the
+    // stored selection no longer matches the live selection.
+    let mut tx = fixture.pool.begin().await.expect("transaction");
+    sqlx::query(
+        "UPDATE public.mcp_bindings SET tools='[]'::jsonb, revision=revision+1 \
+         WHERE tenant_id=$1::uuid AND binding_id=$2::uuid",
+    )
+    .bind(TENANT_A)
+    .bind(descriptor.binding_id.as_str())
+    .execute(&mut *tx)
+    .await
+    .expect("mutate stored tools");
+    sqlx::query(
+        "DELETE FROM public.mcp_binding_tools \
+         WHERE tenant_id=$1::uuid AND binding_id=$2::uuid",
+    )
+    .bind(TENANT_A)
+    .bind(descriptor.binding_id.as_str())
+    .execute(&mut *tx)
+    .await
+    .expect("drop stored tool rows");
+    tx.commit().await.expect("commit mutation");
+
+    let mutated = bindings::inspect(&fixture.pool, &authority(TENANT_A), &descriptor.binding_id)
+        .await
+        .expect("inspect mutated binding");
+    let refused = service
+        .effective(&mutated)
+        .await
+        .expect_err("the stored selection changed");
+    assert_eq!(conflict_error(refused), "effective selection changed");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_profile_without_the_required_service_reference_is_refused() {
+    let fixture = Fixture::new().await;
+    // A gateway-only profile: the synthetic service's licence bearer has no reference.
+    insert_profile(&fixture).await;
+    published_binding_toolkit(&fixture, TOOL_ALPHA, "alpha_tool", OPERATION_ALPHA).await;
+    let refused = fixture
+        .service()
+        .binding_write(
+            &principal(TENANT_A, true),
+            &binding_spec(PROFILE, FUTURE, tenant_context()),
+            None,
+            None,
+        )
+        .await
+        .expect_err("the profile lacks the service application reference");
+    assert_eq!(
+        invalid_error(refused),
+        "credential profile lacks required application reference"
+    );
+    fixture.finish().await;
 }

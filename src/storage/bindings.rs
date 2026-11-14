@@ -10,6 +10,7 @@
 //! and no `sqlx` date mapping: `mcp_access_events.event_id` is minted by Postgres 18's
 //! `uuidv7()`, and `expires_at` is read as epoch microseconds and rebuilt as a `DateTime<Utc>`.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use base64::Engine as _;
@@ -22,8 +23,10 @@ use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgConnection, PgPool, Row};
 
 use crate::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
-use crate::catalog::models::Attribution;
-use crate::catalog::toolkit_models::{BindingDescriptor, EffectiveTool};
+use crate::catalog::models::{Attribution, ExactReference, ServiceManifest};
+use crate::catalog::toolkit_models::{
+    BindingDescriptor, BindingSpec, CredentialProfile, EffectiveTool,
+};
 use crate::storage::catalog::CatalogStoreError;
 
 /// The number of random bytes behind a binding token: `secrets.token_urlsafe(32)`.
@@ -219,6 +222,209 @@ pub async fn audit_binding(
     Ok(())
 }
 
+/// A fresh UUIDv7 identity: 48 bits of epoch milliseconds, 74 random bits, RFC 9562 version and
+/// variant markers. The reference mints identities client-side with `uuid.uuid7()`; this crate
+/// carries no UUID dependency, so the canonical string is assembled and validated here.
+pub fn fresh_identity() -> Uuid7 {
+    let mut bytes = [0u8; 16];
+    let millis = u64::try_from(Utc::now().timestamp_millis()).unwrap_or(0) & 0x0000_ffff_ffff_ffff;
+    bytes[..6].copy_from_slice(&millis.to_be_bytes()[2..]);
+    rand::rng().fill_bytes(&mut bytes[6..]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let raw = hex(&bytes);
+    let canonical = format!(
+        "{}-{}-{}-{}-{}",
+        &raw[0..8],
+        &raw[8..12],
+        &raw[12..16],
+        &raw[16..20],
+        &raw[20..32]
+    );
+    Uuid7::new(canonical).expect("a generated RFC 9562 UUIDv7 is canonical")
+}
+
+/// The reference's `profile_row`: one tenant-owned credential profile manifest, optionally
+/// locked for an update (`FOR UPDATE`) or an issuance read (`FOR SHARE`).
+///
+/// A missing row is `CatalogNotFoundError("credential profile not found")`.
+pub async fn profile_row(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    identity: &Uuid7,
+    lock: bool,
+    share: bool,
+) -> Result<CredentialProfile, CatalogStoreError> {
+    let statement = format!(
+        "SELECT manifest FROM public.mcp_credential_profiles \
+         WHERE tenant_id = $1::uuid AND profile_id = $2::uuid{}",
+        if lock {
+            " FOR UPDATE"
+        } else if share {
+            " FOR SHARE"
+        } else {
+            ""
+        }
+    );
+    let row = sqlx::query(AssertSqlSafe(statement))
+        .bind(tenant.as_str())
+        .bind(identity.as_str())
+        .fetch_optional(&mut *conn)
+        .await?
+        .ok_or(CatalogStoreError::NotFound("credential profile not found"))?;
+    let manifest: Value = row.try_get("manifest")?;
+    serde_json::from_value(manifest).map_err(|_| CatalogStoreError::Corrupt("credential profile"))
+}
+
+/// The reference's `validate_profile` service read: one manifest per operation behind a
+/// selection, in one statement rather than one per operation.
+pub async fn service_manifests(
+    conn: &mut PgConnection,
+    references: &[ExactReference],
+) -> Result<HashMap<(String, u32), ServiceManifest>, CatalogStoreError> {
+    if references.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let identities: Vec<String> = references
+        .iter()
+        .map(|reference| reference.id.as_str().to_owned())
+        .collect();
+    let versions: Vec<i32> = references
+        .iter()
+        .map(|reference| version_bits(reference.version))
+        .collect();
+    let rows = sqlx::query(
+        "SELECT o.operation_id::text AS operation_id, o.version, s.manifest \
+         FROM public.mcp_operation_versions o \
+         JOIN public.mcp_service_versions s \
+           ON (s.service_id, s.version) = (o.service_id, o.service_version) \
+         WHERE (o.operation_id, o.version) IN \
+           (SELECT * FROM unnest($1::text[]::uuid[], $2::int[]))",
+    )
+    .bind(&identities)
+    .bind(&versions)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut found: HashMap<(String, u32), ServiceManifest> =
+        HashMap::with_capacity(references.len());
+    for row in rows {
+        let identity: String = row.try_get("operation_id")?;
+        let stored: i32 = row.try_get("version")?;
+        let version =
+            u32::try_from(stored).map_err(|_| CatalogStoreError::Corrupt("operation version"))?;
+        let manifest: Value = row.try_get("manifest")?;
+        let manifest: ServiceManifest = serde_json::from_value(manifest)
+            .map_err(|_| CatalogStoreError::Corrupt("service manifest"))?;
+        found.insert((identity, version), manifest);
+    }
+    Ok(found)
+}
+
+/// The reference's `write_binding` insert: the row and its token digest in one statement.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_binding(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    identity: &Uuid7,
+    gateway_license_id: &AuthorityId,
+    credential_profile_id: &Uuid7,
+    token_sha256: &str,
+    spec: &BindingSpec,
+    tools: &[EffectiveTool],
+    actor: &Attribution,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "INSERT INTO public.mcp_bindings(tenant_id,binding_id,gateway_license_id,\
+         credential_profile_id,token_sha256,spec,tools,enabled,expires_at,created_by,updated_by) \
+         VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::jsonb,$7::jsonb,$8,\
+         (timestamptz 'epoch' + $9::bigint * interval '1 microsecond'),$10,$10)",
+    )
+    .bind(tenant.as_str())
+    .bind(identity.as_str())
+    .bind(gateway_license_id.as_str())
+    .bind(credential_profile_id.as_str())
+    .bind(token_sha256)
+    .bind(snapshot(spec, "binding spec snapshot")?)
+    .bind(tools_json(tools)?)
+    .bind(spec.enabled)
+    .bind(instant_micros(spec.expires_at))
+    .bind(snapshot(actor, "binding actor snapshot")?)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The reference's `write_binding` update: the replacement spec and its selection.
+pub async fn update_binding(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    identity: &Uuid7,
+    credential_profile_id: &Uuid7,
+    spec: &BindingSpec,
+    tools: &[EffectiveTool],
+    actor: &Attribution,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "UPDATE public.mcp_bindings SET spec=$3::jsonb,tools=$4::jsonb,\
+         credential_profile_id=$5::uuid,enabled=$6,\
+         expires_at=(timestamptz 'epoch' + $7::bigint * interval '1 microsecond'),\
+         revision=revision+1,updated_by=$8,updated_at=clock_timestamp() \
+         WHERE tenant_id=$1::uuid AND binding_id=$2::uuid",
+    )
+    .bind(tenant.as_str())
+    .bind(identity.as_str())
+    .bind(snapshot(spec, "binding spec snapshot")?)
+    .bind(tools_json(tools)?)
+    .bind(credential_profile_id.as_str())
+    .bind(spec.enabled)
+    .bind(instant_micros(spec.expires_at))
+    .bind(snapshot(actor, "binding actor snapshot")?)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The reference's `act_binding` update: rotate (`Some` digest) or revoke (keep the digest).
+pub async fn rotate_or_revoke(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    identity: &Uuid7,
+    token_sha256: Option<&str>,
+    revoked: bool,
+    actor: &Attribution,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "UPDATE public.mcp_bindings SET token_sha256=COALESCE($3,token_sha256),revoked=$4,\
+         revision=revision+1,updated_by=$5,updated_at=clock_timestamp() \
+         WHERE tenant_id=$1::uuid AND binding_id=$2::uuid",
+    )
+    .bind(tenant.as_str())
+    .bind(identity.as_str())
+    .bind(token_sha256)
+    .bind(revoked)
+    .bind(snapshot(actor, "binding actor snapshot")?)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The reference's `act_binding` session drop: every protocol session of the binding.
+pub async fn delete_sessions(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    identity: &Uuid7,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "DELETE FROM public.mcp_protocol_sessions \
+         WHERE tenant_id = $1::uuid AND binding_id = $2::uuid",
+    )
+    .bind(tenant.as_str())
+    .bind(identity.as_str())
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// The row columns [`get_binding`] reads. `expires_at` travels as epoch microseconds because
 /// this crate's `sqlx` build carries no `chrono` type mapping.
 const COLUMNS: &str = "tenant_id::text AS tenant_id, binding_id::text AS binding_id, \
@@ -251,6 +457,19 @@ fn hex(bytes: &[u8]) -> String {
         write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
     }
     hex
+}
+
+/// The reference's `snapshot`: the JSON form stored in every `jsonb` column.
+fn snapshot<T: serde::Serialize>(
+    value: &T,
+    what: &'static str,
+) -> Result<Value, CatalogStoreError> {
+    serde_json::to_value(value).map_err(|_| CatalogStoreError::Corrupt(what))
+}
+
+/// An instant as epoch microseconds, the exact integer the write path binds.
+fn instant_micros(instant: DateTime<Utc>) -> i64 {
+    instant.timestamp_micros()
 }
 
 fn positive(value: i64) -> Result<PositiveVersion, CatalogStoreError> {

@@ -186,6 +186,8 @@ impl Fixture {
             SelectionResolver {
                 platform_tenant_id: authority(TENANT_PLATFORM),
             },
+            // No credential profile is validated on the toolkit write path.
+            None,
         )
     }
 
