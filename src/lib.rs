@@ -34,7 +34,13 @@ pub struct AppState {
 /// Document-level OpenAPI metadata. `info` (title, version, description) comes from
 /// Cargo.toml, so renaming the crate renames the spec.
 #[derive(OpenApi)]
-#[openapi(tags((name = "health", description = "Liveness")))]
+#[openapi(
+    tags(
+        (name = "health", description = "Liveness"),
+        (name = "tools", description = "Tenant tool catalog")
+    ),
+    components(schemas(routes::tools::ValidationError))
+)]
 struct ApiDoc;
 
 /// Every route is registered here, through `routes!`, so the served router and the
@@ -45,6 +51,14 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::health::live))
         .routes(routes!(routes::health::ready))
         .routes(routes!(routes::health::api_health))
+        .routes(routes!(routes::tools::create_tool))
+        .routes(routes!(routes::tools::append_tool))
+        .routes(routes!(routes::tools::definitions))
+        .routes(routes!(routes::tools::inspect))
+        .routes(routes!(routes::tools::validate))
+        .routes(routes!(routes::tools::publish_tool))
+        .routes(routes!(routes::tools::disable_tool))
+        .routes(routes!(routes::tools::retire_tool))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.
