@@ -3,13 +3,17 @@
 //! trusted-header tenant extractor. `main.rs` is a thin wrapper so integration tests can
 //! build the exact router the binary serves.
 
+pub mod auth;
+pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod mcp;
 pub mod routes;
+pub mod storage;
 pub mod telemetry;
 pub mod tenant;
+pub mod toolkits;
 
 use axum::Router;
 use sqlx::PgPool;
