@@ -37,7 +37,8 @@ pub struct AppState {
 #[openapi(
     tags(
         (name = "health", description = "Liveness"),
-        (name = "tools", description = "Tenant tool catalog")
+        (name = "tools", description = "Tenant tool catalog"),
+        (name = "toolkits", description = "Tenant toolkits")
     ),
     components(schemas(routes::tools::ValidationError))
 )]
@@ -59,6 +60,12 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::tools::publish_tool))
         .routes(routes!(routes::tools::disable_tool))
         .routes(routes!(routes::tools::retire_tool))
+        .routes(routes!(routes::toolkits::create_toolkit))
+        .routes(routes!(routes::toolkits::append_toolkit))
+        .routes(routes!(routes::toolkits::list_toolkits))
+        .routes(routes!(routes::toolkits::inspect_toolkit))
+        .routes(routes!(routes::toolkits::publish_toolkit))
+        .routes(routes!(routes::toolkits::disable_toolkit))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.

@@ -372,7 +372,7 @@ fn u32_setting(
 }
 
 /// The reference's reserved platform tenant, the owner of platform toolkits.
-fn default_platform_tenant_id() -> Rfc4122Uuid {
+pub(crate) fn default_platform_tenant_id() -> Rfc4122Uuid {
     Rfc4122Uuid::parse("01900000-0000-7000-8000-00000000f001")
         .expect("the default platform tenant is a valid RFC 4122 UUID")
 }

@@ -2,4 +2,5 @@
 //! `api_router()` with `routes!(...)`.
 
 pub mod health;
+pub mod toolkits;
 pub mod tools;
