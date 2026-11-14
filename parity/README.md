@@ -58,6 +58,17 @@ The four matched operations are the health group (`/health`, `/health/live`, `/h
 `/api/health`). The 104 ignored ones are every unported source operation, grouped by the phase
 that ports them in `parity.toml`'s `[openapi_diff.ignore]`; each phase deletes its own group.
 
+_Inline `$defs` (2026-11-14)._ The runner inlines each operation's local `$defs` before the diff.
+The reference embeds pydantic's `model_json_schema()` in a request body, where `$id` gives the
+embedded schema its own resource root and `$defs` holds what its `#/$defs/...` references point
+at; the normaliser resolves every `$ref` against the document root, so those references are
+unresolvable — the source document does not diff against **itself** on `POST /mcp/tools`
+(`#/$defs/ToolManifest`). Inlining produces the schema the normaliser would compute under correct
+`$id` scoping, so the verdict stays semantic. Measured after the change: the source self-diff of
+`POST /mcp/tools` and `POST /mcp/tools/{identity}/versions` is `equal`, and the committed baseline
+above is unchanged.
+
+
 ## 3. MCP handshake — PASS
 
 `tests/http.rs::mcp_initialize_negotiates_a_protocol_version` asserts the **exact** `initialize`

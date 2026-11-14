@@ -37,8 +37,31 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# Binding expiry is a timezone-aware RFC 3339 instant (`BindingSpec.expires_at`).
+chrono = { version = "=0.4.45", features = ["serde"] }
+# The licence authority is an HTTP boundary: authentication introspects the caller's opaque
+# licence (`POST /license/introspect`), exactly as the reference service does.
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "json",
+    "rustls",
+] }
+# Catalog names, operations, app keys and digests are pattern-checked in the domain model.
+regex = "1.12.4"
 tower-http = { version = "0.7.1", features = ["trace"] }
 rmcp = { version = "3.9.0", features = ["server", "transport-streamable-http-server"] }
+sha2 = "0.11.1"
+# `tools/list` cursors are `<base64url(json {o,f})>.<hmac_sha256 hex>`, keyed by the binding's
+# stored token digest — the reference's `hmac.digest(key, raw, "sha256")`. 0.13 is the release
+# that pairs with digest/sha2 0.11 (0.12 is digest 0.10 and will not compile against it).
+hmac = "=0.13.0"
+# Cursor signatures are lowercase hex on the wire; the binding's key is stored as hex text.
+hex = "=0.4.3"
+# A binding token is 32 cryptographically random bytes rendered as URL-safe base64 without
+# padding, and is only ever stored and compared as its SHA-256 digest.
+rand = "0.10.3"
+base64 = "0.22.1"
+subtle = "2.6.1"
+unicode-normalization = "0.1.26"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

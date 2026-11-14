@@ -1,0 +1,208 @@
+//! The catalog projection operations: `GET /mcp/available-tools` and
+//! `GET /mcp/bindings/{identity}/effective-tools`.
+//!
+//! Ported from the reference `src/routers/bindings.py` (`available_tools`, `preview_binding`).
+//! Neither operation reads a body or declares a response model in the reference, so the
+//! OpenAPI annotations below declare none: a success response is the empty `{}` schema
+//! (`AnyJson`), and the preview operation with its path parameter declares the reference's 422
+//! `HTTPValidationError`.
+//!
+//! A refusal is `{"error": <code>}` with `Cache-Control: no-store`: permission is
+//! `403 forbidden`, a missing binding `404 not_found`, a catalog conflict
+//! `409 revision_or_lifecycle_conflict` and an invalid path identity or stored row
+//! `422 invalid_request`.
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderValue;
+use axum::http::StatusCode;
+use axum::http::header::CACHE_CONTROL;
+use axum::response::{IntoResponse, Response};
+use serde_json::json;
+
+use crate::AppState;
+use crate::auth::AuthPrincipal;
+use crate::catalog::ids::{AuthorityId, Uuid7};
+use crate::catalog::resolver::{CatalogResolver, CatalogResolverError, ResolvedTool};
+use crate::routes::health::AnyJson;
+use crate::routes::tools::HTTPValidationError;
+use crate::storage::catalog::CatalogStoreError;
+use crate::toolkits::resolver::SelectionResolver;
+use crate::toolkits::service::{ToolkitService, ToolkitServiceError};
+
+// ── refusals ──────────────────────────────────────────────────────────────────────────────
+
+/// A projection refusal, rendered as the reference's `{"error": <code>}` with `no-store`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvailableError {
+    /// `PermissionError`: the caller lacks binding or management authority, or a selected
+    /// tool may not be served.
+    Forbidden,
+    /// `CatalogNotFoundError`: no such tenant-owned binding.
+    NotFound,
+    /// `CatalogConflictError`: the catalog changed during resolution.
+    Conflict,
+    /// The path identity is not a UUIDv7.
+    Invalid,
+    /// A stored row or the database failed; a 4xx would misreport it as the caller's mistake.
+    Internal,
+}
+
+impl IntoResponse for AvailableError {
+    fn into_response(self) -> Response {
+        let (status, code) = match self {
+            Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+            Self::Conflict => (StatusCode::CONFLICT, "revision_or_lifecycle_conflict"),
+            Self::Invalid => (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request"),
+            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+        };
+        let mut response = (status, Json(json!({ "error": code }))).into_response();
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+    }
+}
+
+impl From<CatalogResolverError> for AvailableError {
+    fn from(error: CatalogResolverError) -> Self {
+        match error {
+            CatalogResolverError::Forbidden(_) => Self::Forbidden,
+            CatalogResolverError::Conflict(_) => Self::Conflict,
+            CatalogResolverError::Invalid(_) => Self::Invalid,
+            CatalogResolverError::Store(error)
+            | CatalogResolverError::Service(ToolkitServiceError::Store(error)) => error.into(),
+            CatalogResolverError::Service(error) => error.into(),
+        }
+    }
+}
+
+impl From<ToolkitServiceError> for AvailableError {
+    fn from(error: ToolkitServiceError) -> Self {
+        match error {
+            ToolkitServiceError::Forbidden(_) => Self::Forbidden,
+            ToolkitServiceError::Invalid(_) => Self::Invalid,
+            ToolkitServiceError::Conflict(_) => Self::Conflict,
+            ToolkitServiceError::Store(error) => error.into(),
+        }
+    }
+}
+
+impl From<CatalogStoreError> for AvailableError {
+    fn from(error: CatalogStoreError) -> Self {
+        match error {
+            CatalogStoreError::NotFound(_) => Self::NotFound,
+            CatalogStoreError::Conflict(_) => Self::Conflict,
+            // A stored row the model can no longer parse: the reference's ValidationError
+            // on that read, which its exception handler maps to 422.
+            CatalogStoreError::Corrupt(_) => Self::Invalid,
+            CatalogStoreError::Database(error) => {
+                tracing::error!(%error, "catalog resolver database failure");
+                Self::Internal
+            }
+        }
+    }
+}
+
+// ── handlers ──────────────────────────────────────────────────────────────────────────────
+
+/// The calling binding's live public tool projection.
+#[utoipa::path(
+    get,
+    path = "/mcp/available-tools",
+    tag = "available",
+    responses((status = 200, description = "Successful Response", body = AnyJson))
+)]
+pub async fn available_tools(
+    State(state): State<AppState>,
+    principal: AuthPrincipal,
+) -> Result<Response, AvailableError> {
+    let tools = resolver(&state).resolve(&principal.0).await?;
+    Ok(projection(&state, &tools))
+}
+
+/// Any tenant-owned binding's public tool projection, for a management principal.
+#[utoipa::path(
+    get,
+    path = "/mcp/bindings/{identity}/effective-tools",
+    tag = "available",
+    params(("identity" = String, Path, format = "uuid7")),
+    responses(
+        (status = 200, description = "Successful Response", body = AnyJson),
+        (status = 422, description = "Validation Error", body = HTTPValidationError)
+    )
+)]
+pub async fn effective_tools(
+    State(state): State<AppState>,
+    principal: AuthPrincipal,
+    Path(identity): Path<String>,
+) -> Result<Response, AvailableError> {
+    let identity = Uuid7::new(identity).map_err(|_| AvailableError::Invalid)?;
+    let tools = resolver(&state).preview(&principal.0, &identity).await?;
+    Ok(projection(&state, &tools))
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────────────────
+
+/// The reference's response body: the public projection plus the execution flag.
+fn projection(state: &AppState, tools: &[ResolvedTool]) -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "tools": tools.iter().map(ResolvedTool::public).collect::<Vec<_>>(),
+            "execution": if state.execution_enabled { "enabled" } else { "unavailable" },
+        })),
+    )
+        .into_response()
+}
+
+/// The live resolver for this request. The toolkit service carries the configured gateway
+/// application key because `effective` re-validates the binding's credential profile.
+pub(crate) fn resolver(state: &AppState) -> CatalogResolver {
+    CatalogResolver::new(
+        state.pool.clone(),
+        ToolkitService::new(
+            state.pool.clone(),
+            SelectionResolver {
+                platform_tenant_id: AuthorityId::new(state.platform_tenant_id.to_string())
+                    .expect("the configured platform tenant is an RFC 4122 UUID"),
+            },
+            state.license_app_key.clone(),
+        ),
+        state.approved_runner_images.clone(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stored row the model can no longer parse is the reference's `ValidationError` on that
+    /// read (422), matching `bindings.rs` and `tools.rs`; only a failed statement is a 500.
+    #[test]
+    fn a_corrupt_stored_row_is_the_reference_validation_error() {
+        assert_eq!(
+            AvailableError::from(CatalogStoreError::Corrupt("stored row")),
+            AvailableError::Invalid
+        );
+        assert_eq!(
+            AvailableError::from(CatalogStoreError::Database(sqlx::Error::PoolClosed)),
+            AvailableError::Internal
+        );
+    }
+
+    /// `validate_profile`'s `ValueError` is the caller's 422 through every route-level mapping,
+    /// never the catalog conflict's 409.
+    #[test]
+    fn an_invalid_credential_profile_is_not_a_catalog_conflict() {
+        assert_eq!(
+            AvailableError::from(ToolkitServiceError::Invalid("wrong application")),
+            AvailableError::Invalid
+        );
+        assert_eq!(
+            AvailableError::from(CatalogResolverError::Invalid("wrong application")),
+            AvailableError::Invalid
+        );
+    }
+}

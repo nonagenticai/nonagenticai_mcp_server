@@ -54,10 +54,7 @@ upstreams = []
 #   phase 6  the fr channel
 [openapi_diff.ignore]
 paths = [
-  "/mcp/available-tools",       # phase 2
-  "/mcp/tools*",                # phase 2
-  "/mcp/toolkits*",             # phase 2
-  "/mcp/bindings*",             # phase 2
+  "/mcp/toolkits/import",       # phase 5
   "/mcp/runs*",                 # phase 3
   "/mcp/builder*",              # phase 5
   "/mcp/internal*",             # phase 5 (the tenant-scoped mirrors of builder/sources)
