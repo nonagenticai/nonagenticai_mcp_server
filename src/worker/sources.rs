@@ -515,7 +515,8 @@ impl SourceRegistry {
         let ca_file: Option<String> = row.try_get("ca_file")?;
         if tenant_owned {
             // The reference's tenant-side half of `get` (`registry.py:72-83`): public https only,
-            // and a licence source additionally needs an operator-approved host.
+            // and a licence source additionally needs an operator-approved host. The reference's
+            // port bound (79-81) is the egress client's 443-only policy here.
             if allow_internal_http || ca_file.is_some() {
                 return Err(SourceError::Denied("tenant source is public https only"));
             }
@@ -742,8 +743,13 @@ pub(crate) fn host_allowed(base_url: &str, allowed: &[String]) -> bool {
         } else if entry_port.is_some() {
             continue;
         }
-        if let Some(suffix) = pattern.strip_prefix('*') {
-            // `pattern[1:]` keeps the leading dot, so the apex is not covered.
+        if let Some(suffix) = pattern
+            .strip_prefix('*')
+            .filter(|suffix| suffix.starts_with('.'))
+        {
+            // The reference's wildcard must carry the dot (`guard.py`: `pattern.startswith("*.")`),
+            // so a bare `*` is not a wildcard. The suffix keeps its leading dot, so the apex is
+            // never covered.
             if host.ends_with(suffix) && host.len() > suffix.len() {
                 return true;
             }
@@ -823,6 +829,16 @@ mod tests {
         assert!(host_allowed("https://deep.a.b.example", &list));
         assert!(!host_allowed("https://b.example", &list));
         assert!(!host_allowed("https://notb.example", &list));
+    }
+
+    #[test]
+    fn a_bare_star_entry_is_not_a_wildcard() {
+        // The settings refuse these; the registry still must not read a raw entry as match-all.
+        assert!(!host_allowed("https://api.example.test", &allowed(&["*"])));
+        assert!(!host_allowed(
+            "https://api.example.test",
+            &allowed(&["*example.test"])
+        ));
     }
 
     #[test]
