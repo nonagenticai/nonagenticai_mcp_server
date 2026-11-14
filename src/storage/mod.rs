@@ -6,6 +6,9 @@
 
 pub mod bindings;
 pub mod catalog;
+pub mod executions;
+pub mod run_activity;
+pub mod task_inputs;
 pub mod toolkits;
 
 pub use catalog::{AppendRequest, CatalogRepository, CatalogStoreError, ToolDefinition};
