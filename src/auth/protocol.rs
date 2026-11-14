@@ -96,6 +96,9 @@ pub async fn protect(State(auth): State<Auth>, mut request: Request, next: Next)
 }
 
 async fn authorize(auth: &Auth, headers: &HeaderMap, path: &str) -> Result<Principal, AuthError> {
+    // Exactly the reference's rule (`src/auth/protocol.py:382-384`): an operator key raises a
+    // single run's path to management, but the collection POST `/mcp/runs` stays binding-auth,
+    // so a management-shaped submission there is refused before admission, not at the handler.
     let management = is_management(path)
         || (path.starts_with("/mcp/runs/") && headers.contains_key("x-mcp-admin-key"));
 

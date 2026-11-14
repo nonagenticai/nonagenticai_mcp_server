@@ -8,9 +8,11 @@ pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod execution;
 pub mod mcp;
 pub mod routes;
 pub mod storage;
+pub mod tasks;
 pub mod telemetry;
 pub mod tenant;
 pub mod toolkits;
@@ -38,6 +40,8 @@ pub struct AppState {
     pub platform_tenant_id: auth::Rfc4122Uuid,
     /// `CATALOG_PAGE_SIZE`: the page bound for `tools/list` and the catalog projection.
     pub catalog_page_size: u32,
+    /// The `MCP_*` execution queue, timeout and retention bounds.
+    pub execution: config::ExecutionSettings,
 }
 
 /// Document-level OpenAPI metadata. `info` (title, version, description) comes from
@@ -49,7 +53,8 @@ pub struct AppState {
         (name = "tools", description = "Tenant tool catalog"),
         (name = "toolkits", description = "Tenant toolkits"),
         (name = "bindings", description = "Tenant bindings"),
-        (name = "available", description = "Live catalog projection")
+        (name = "available", description = "Live catalog projection"),
+        (name = "runs", description = "Durable execution runs")
     ),
     components(schemas(routes::tools::ValidationError))
 )]
@@ -84,6 +89,10 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::bindings::revoke_binding))
         .routes(routes!(routes::available::available_tools))
         .routes(routes!(routes::available::effective_tools))
+        .routes(routes!(routes::runs::submit_run))
+        .routes(routes!(routes::runs::inspect_run))
+        .routes(routes!(routes::runs::run_events))
+        .routes(routes!(routes::runs::cancel_run))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.

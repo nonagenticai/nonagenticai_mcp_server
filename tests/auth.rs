@@ -164,6 +164,7 @@ fn state() -> AppState {
     AppState {
         pool,
         execution_enabled: false,
+        execution: mcp_server_rs::config::ExecutionSettings::default(),
         license_app_key: None,
         approved_runner_images: Vec::new(),
         platform_tenant_id: mcp_server_rs::auth::Rfc4122Uuid::parse(

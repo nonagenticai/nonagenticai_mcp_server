@@ -42,6 +42,7 @@ fn state() -> AppState {
     AppState {
         pool,
         execution_enabled: false,
+        execution: mcp_server_rs::config::ExecutionSettings::default(),
         license_app_key: None,
         approved_runner_images: Vec::new(),
         platform_tenant_id: Rfc4122Uuid::parse("01900000-0000-7000-8000-00000000f001")

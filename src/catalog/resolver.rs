@@ -23,7 +23,7 @@ use crate::toolkits::service::{ToolkitService, ToolkitServiceError};
 
 /// One resolved public tool: the stored manifest, its effective selection entry and the
 /// binding's tenant-bound context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTool {
     /// The exact tool version the selection resolved to.
     pub manifest: ToolManifest,

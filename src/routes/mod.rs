@@ -4,5 +4,6 @@
 pub mod available;
 pub mod bindings;
 pub mod health;
+pub mod runs;
 pub mod toolkits;
 pub mod tools;

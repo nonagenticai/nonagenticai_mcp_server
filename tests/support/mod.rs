@@ -31,6 +31,7 @@ use mcp_server_rs::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
 use mcp_server_rs::catalog::lifecycle::VersionStatus;
 use mcp_server_rs::catalog::models::ToolManifest;
 use mcp_server_rs::catalog::toolkit_models::ToolkitManifest;
+use mcp_server_rs::config::ExecutionSettings;
 use mcp_server_rs::toolkits::resolver::SelectionResolver;
 use mcp_server_rs::toolkits::service::ToolkitService;
 use mcp_server_rs::{AppState, app_with_auth, db};
@@ -191,7 +192,23 @@ impl Fixture {
             approved_runner_images: Vec::new(),
             platform_tenant_id: Rfc4122Uuid::parse(TENANT_PLATFORM).expect("static uuid"),
             catalog_page_size,
+            execution: ExecutionSettings::default(),
         }
+    }
+
+    /// The same state with the execution slice live: the runs tests' settings, the
+    /// `EXECUTION_ENABLED` switch, and the runner digest `kata_manifest()` names.
+    pub fn state_with_execution(
+        &self,
+        settings: ExecutionSettings,
+        execution_enabled: bool,
+    ) -> AppState {
+        let mut state = self.state_with_page_size(10);
+        state.execution = settings;
+        state.execution_enabled = execution_enabled;
+        state.approved_runner_images =
+            vec![format!("registry.example/runner@sha256:{}", "b".repeat(64))];
+        state
     }
 
     pub fn auth(&self) -> Auth {
@@ -318,8 +335,18 @@ impl BindingAuthority for FixedBindings {
 }
 
 pub fn admin_key_file() -> PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("mcp-routes-available-admin-{}", std::process::id()));
+    // One file per call: tests in one binary run on several threads, and a shared path is
+    // truncated and rewritten under a concurrent reader (which then sees an empty key).
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "mcp-routes-available-admin-{}-{nanos}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&path, ADMIN_KEY).expect("write operator key");
     path
 }
