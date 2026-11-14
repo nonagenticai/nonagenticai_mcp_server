@@ -57,7 +57,7 @@ pub const SINGLE: &[&str] = &["additionalProperties", "items", "not"];
 /// Positions whose value is a bounded array of schemas.
 pub const ARRAYS: &[&str] = &["prefixItems", "allOf", "anyOf", "oneOf"];
 
-/// The schema limits. Defaults are the reference `Settings` defaults.
+/// The schema and instance limits. Defaults are the reference `Settings` defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchemaLimits {
     /// Maximum UTF-8 bytes of the serialized schema.
@@ -68,6 +68,14 @@ pub struct SchemaLimits {
     pub max_depth: usize,
     /// Maximum `$ref` occurrences.
     pub max_references: usize,
+    /// Maximum UTF-8 bytes of the serialized instance.
+    pub max_instance_bytes: usize,
+    /// Maximum instance nodes.
+    pub max_instance_nodes: usize,
+    /// Maximum instance nesting depth.
+    pub max_instance_depth: usize,
+    /// Maximum schema-work times instance-work a validation may charge.
+    pub max_validation_work: usize,
 }
 
 impl Default for SchemaLimits {
@@ -77,6 +85,10 @@ impl Default for SchemaLimits {
             max_nodes: 1_024,
             max_depth: 16,
             max_references: 32,
+            max_instance_bytes: 1_048_576,
+            max_instance_nodes: 10_000,
+            max_instance_depth: 32,
+            max_validation_work: 100_000,
         }
     }
 }

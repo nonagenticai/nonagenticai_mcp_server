@@ -4,6 +4,7 @@
 pub mod error;
 pub mod formats;
 pub mod ids;
+pub mod instance;
 pub mod lifecycle;
 pub mod models;
 pub mod package;
