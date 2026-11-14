@@ -37,8 +37,9 @@ pub struct Config {
     pub platform_tenant_id: Rfc4122Uuid,
     /// `CATALOG_PAGE_SIZE` (optional, default 10, 1 to 100): the management catalog page bound.
     pub catalog_page_size: u32,
-    /// `MCP_APPROVED_RUNNER_IMAGES` (optional, comma-separated, default empty): the runner
-    /// image digests a `kata_python` tool may name. A tool with any other digest is refused.
+    /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
+    /// digests a `kata_python` tool may name, e.g. `["registry.internal:5000/runner@sha256:…"]`.
+    /// A tool with any other digest is refused.
     pub approved_runner_images: Vec<String>,
     /// The `MCP_MAX_PACKAGE_*` bounds a submitted tool package is validated against.
     pub packages: PackageLimits,
@@ -82,7 +83,10 @@ impl Config {
             execution_enabled,
             platform_tenant_id,
             catalog_page_size,
-            approved_runner_images: comma_list(get("MCP_APPROVED_RUNNER_IMAGES")),
+            approved_runner_images: json_string_list(
+                get("MCP_APPROVED_RUNNER_IMAGES"),
+                "MCP_APPROVED_RUNNER_IMAGES",
+            )?,
             // `get` is also consumed by `PackageLimits::from_lookup` below, so hand this
             // settings block its own borrowing closure instead of moving the shared one.
             execution: ExecutionSettings::from_lookup(|key| get(key))?,
@@ -374,8 +378,9 @@ pub struct WorkerSettings {
     /// `MCP_RUNNER_IMAGE_DIGEST` (optional): the runner image a run may use. Required when
     /// execution is enabled.
     pub runner_image_digest: Option<String>,
-    /// `MCP_APPROVED_RUNNER_IMAGES` (optional, comma-separated, default empty): the runner image
-    /// digests a `kata_python` tool may name. Must be non-empty when execution is enabled.
+    /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
+    /// digests a `kata_python` tool may name, e.g. `["registry.internal:5000/runner@sha256:…"]`.
+    /// Must be non-empty when execution is enabled.
     pub approved_runner_images: Vec<String>,
     /// `MCP_RUN_MEMORY_REQUEST_MI` (32 to 1024, default 256): runner memory request, MiB.
     pub run_memory_request_mi: u32,
@@ -516,7 +521,10 @@ impl WorkerSettings {
             run_namespace: get("MCP_RUN_NAMESPACE").unwrap_or_else(|| "mcp-runs".to_owned()),
             kata_runtime_class: get("MCP_KATA_RUNTIME_CLASS"),
             runner_image_digest: get("MCP_RUNNER_IMAGE_DIGEST"),
-            approved_runner_images: comma_list(get("MCP_APPROVED_RUNNER_IMAGES")),
+            approved_runner_images: json_string_list(
+                get("MCP_APPROVED_RUNNER_IMAGES"),
+                "MCP_APPROVED_RUNNER_IMAGES",
+            )?,
             run_memory_request_mi: u32_setting(&get, "MCP_RUN_MEMORY_REQUEST_MI", 256, 32, 1_024)?,
             run_memory_limit_mi: u32_setting(&get, "MCP_RUN_MEMORY_LIMIT_MI", 256, 32, 1_024)?,
             run_cpu_request: u32_setting(&get, "MCP_RUN_CPU_REQUEST", 250, 10, 1_000)?,
@@ -922,17 +930,19 @@ fn checked_http_url(name: &'static str, value: &str) -> Result<(), ConfigError> 
     Ok(())
 }
 
-/// A comma-separated list: surrounding whitespace is trimmed and empty entries are dropped.
-fn comma_list(raw: Option<String>) -> Vec<String> {
-    raw.map(|value| {
-        value
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .map(str::to_owned)
-            .collect()
+/// A JSON list of strings, e.g. `["registry.internal:5000/runner@sha256:…"]`.
+///
+/// The reference models the approved runner images as a pydantic-settings `tuple[str, ...]`,
+/// which is read as JSON, so a comma-separated value is refused rather than accepted as one
+/// malformed element.
+fn json_string_list(raw: Option<String>, name: &'static str) -> Result<Vec<String>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str::<Vec<String>>(&raw).map_err(|e| ConfigError::Invalid {
+        name,
+        reason: format!("expected a JSON list of runner image digests: {e}"),
     })
-    .unwrap_or_default()
 }
 
 fn tenant_ids(raw: Option<String>) -> Result<Vec<Rfc4122Uuid>, ConfigError> {
@@ -1232,15 +1242,26 @@ mod tests {
         assert_eq!(configured.max_package_bytes, 20);
     }
 
+    /// The live ConfigMap's value: a JSON array string holding one runner image digest.
+    const LIVE_DIGEST: &str = "registry.internal:5000/nonagenticai_mcp_server_runner@sha256:f457ca27659ac4fbd7c3b84f817c6bbb3d694bfe3bc27f4c7f0192a9a1128d6d";
+
     #[test]
-    fn approved_runner_images_default_empty_and_parse_a_comma_separated_list() {
+    fn approved_runner_images_default_empty_and_parse_a_json_list() {
         let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
         assert!(cfg(&base).unwrap().approved_runner_images.is_empty());
+
+        let live = format!("[\"{LIVE_DIGEST}\"]");
+        let mut pairs = base.to_vec();
+        pairs.push(("MCP_APPROVED_RUNNER_IMAGES", live.as_str()));
+        assert_eq!(
+            cfg(&pairs).unwrap().approved_runner_images,
+            vec![LIVE_DIGEST.to_owned()]
+        );
 
         let mut pairs = base.to_vec();
         pairs.push((
             "MCP_APPROVED_RUNNER_IMAGES",
-            "registry.example/runner@sha256:aaa, registry.example/other@sha256:bbb ,",
+            r#"["registry.example/runner@sha256:aaa", "registry.example/other@sha256:bbb"]"#,
         ));
         assert_eq!(
             cfg(&pairs).unwrap().approved_runner_images,
@@ -1249,6 +1270,82 @@ mod tests {
                 "registry.example/other@sha256:bbb".to_owned(),
             ]
         );
+
+        let mut pairs = base.to_vec();
+        pairs.push(("MCP_APPROVED_RUNNER_IMAGES", "[]"));
+        assert!(cfg(&pairs).unwrap().approved_runner_images.is_empty());
+    }
+
+    #[test]
+    fn approved_runner_images_refuse_values_that_are_not_a_json_list() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        // A bare digest, an unterminated list, an object, a bare JSON string and the old
+        // comma-separated spelling are all refused: the reference reads a tuple as JSON.
+        for value in [
+            "bare-digest",
+            "[\"a\"",
+            "{}",
+            "\"a\"",
+            "registry.example/runner@sha256:aaa,",
+        ] {
+            let mut pairs = base.to_vec();
+            pairs.push(("MCP_APPROVED_RUNNER_IMAGES", value));
+            assert!(
+                matches!(
+                    cfg(&pairs).unwrap_err(),
+                    ConfigError::Invalid {
+                        name: "MCP_APPROVED_RUNNER_IMAGES",
+                        ..
+                    }
+                ),
+                "MCP_APPROVED_RUNNER_IMAGES={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_settings_approved_runner_images_parse_a_json_list() {
+        let live = format!("[\"{LIVE_DIGEST}\"]");
+        let settings = worker_settings(&[("MCP_APPROVED_RUNNER_IMAGES", live.as_str())]).unwrap();
+        assert_eq!(
+            settings.approved_runner_images,
+            vec![LIVE_DIGEST.to_owned()]
+        );
+
+        let settings = worker_settings(&[(
+            "MCP_APPROVED_RUNNER_IMAGES",
+            r#"["registry.example/runner@sha256:aaa", "registry.example/other@sha256:bbb"]"#,
+        )])
+        .unwrap();
+        assert_eq!(
+            settings.approved_runner_images,
+            vec![
+                "registry.example/runner@sha256:aaa".to_owned(),
+                "registry.example/other@sha256:bbb".to_owned(),
+            ]
+        );
+
+        let settings = worker_settings(&[("MCP_APPROVED_RUNNER_IMAGES", "[]")]).unwrap();
+        assert!(settings.approved_runner_images.is_empty());
+
+        for value in [
+            "bare-digest",
+            "[\"a\"",
+            "{}",
+            "\"a\"",
+            "registry.example/runner@sha256:aaa,",
+        ] {
+            assert!(
+                matches!(
+                    worker_settings(&[("MCP_APPROVED_RUNNER_IMAGES", value)]).unwrap_err(),
+                    ConfigError::Invalid {
+                        name: "MCP_APPROVED_RUNNER_IMAGES",
+                        ..
+                    }
+                ),
+                "MCP_APPROVED_RUNNER_IMAGES={value:?}"
+            );
+        }
     }
 
     #[test]
@@ -1632,7 +1729,7 @@ mod tests {
             ("MCP_RUNNER_IMAGE_DIGEST", "sha256:abc"),
             (
                 "MCP_APPROVED_RUNNER_IMAGES",
-                "registry.example/runner@sha256:aaa, registry.example/other@sha256:bbb ,",
+                "[\"registry.example/runner@sha256:aaa\", \"registry.example/other@sha256:bbb\"]",
             ),
             ("MCP_RUN_MEMORY_REQUEST_MI", "512"),
             ("MCP_RUN_MEMORY_LIMIT_MI", "1024"),
@@ -1893,7 +1990,7 @@ mod tests {
         let on = ("EXECUTION_ENABLED", "true");
         let images = (
             "MCP_APPROVED_RUNNER_IMAGES",
-            "registry.example/runner@sha256:aaa",
+            "[\"registry.example/runner@sha256:aaa\"]",
         );
         let kata = ("MCP_KATA_RUNTIME_CLASS", "kata-cc");
         let digest = ("MCP_RUNNER_IMAGE_DIGEST", "sha256:abc");
