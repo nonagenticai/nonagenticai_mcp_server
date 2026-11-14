@@ -68,7 +68,7 @@ const SERVICE_TOKEN: &str = "svc-token";
 const FOREIGN_TOKEN: &str = "foreign-token";
 const SOURCE_SECRET: &str = "source-secret";
 /// A port nothing listens on: a transport failure after the request is prepared.
-const DEAD_BASE: &str = "http://127.0.0.1:1";
+const DEAD_BASE: &str = "http://localhost:1";
 
 fn uuid(value: &str) -> Rfc4122Uuid {
     Rfc4122Uuid::parse(value).expect("static identity")
@@ -184,7 +184,7 @@ async fn upstream() -> Upstream {
         let _ = axum::serve(listener, app).await;
     });
     Upstream {
-        base: format!("http://127.0.0.1:{}", address.port()),
+        base: format!("http://localhost:{}", address.port()),
         seen,
         replies,
     }
@@ -483,6 +483,11 @@ impl Lab {
             settings.builder_source_concurrency,
         );
         let store = WorkerStore::new(fixture.pool.clone(), settings.clone(), execution.clone());
+        // The lab's platform sources are plain http on loopback: `localhost` is the DNS name the
+        // reference's source policy accepts (an IP literal is refused even with internal http),
+        // and a non-default port needs an explicit host:port allow-list entry.
+        let live_port = upstream.base.rsplit(':').next().expect("upstream port");
+        let source_hosts = vec![format!("localhost:{live_port}"), "localhost:1".to_owned()];
         let broker = Broker::new(
             fixture.pool.clone(),
             store.clone(),
@@ -492,7 +497,7 @@ impl Lab {
             CatalogResolver::new(fixture.pool.clone(), fixture.service(), Vec::new()),
             credentials,
             Arc::new(Tokens),
-            SourceRegistry::new(fixture.pool.clone(), Some(SOURCE_KEY_BYTES))
+            SourceRegistry::new(fixture.pool.clone(), Some(SOURCE_KEY_BYTES), source_hosts)
                 .expect("source registry"),
             auth,
             egress,
@@ -729,16 +734,17 @@ async fn seed_source(fixture: &Fixture, config: &Config, owner: &str, base_url: 
         .source_token
         .map(|token| crypto::encrypt(&key, &id, token).expect("seal secret"));
     sqlx::query(
-        "INSERT INTO public.mcp_sources(source_id,owner_tenant_id,source_key,base_url,auth,\
-         token_ciphertext,token_set_at,idempotency_header,max_request_bytes,max_response_bytes,\
-         created_by,updated_by) \
-         VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,\
-         CASE WHEN $6::bytea IS NULL THEN NULL ELSE clock_timestamp() END,$7,$8,$9,$10,$10)",
+        "INSERT INTO public.mcp_sources(source_id,owner_tenant_id,source_key,base_url,\
+         allow_internal_http,auth,token_ciphertext,token_set_at,idempotency_header,\
+         max_request_bytes,max_response_bytes,created_by,updated_by) \
+         VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,\
+         CASE WHEN $7::bytea IS NULL THEN NULL ELSE clock_timestamp() END,$8,$9,$10,$11,$11)",
     )
     .bind(SOURCE_ID)
     .bind(owner)
     .bind(SOURCE_KEY)
     .bind(base_url)
+    .bind(!config.tenant_source)
     .bind(&config.source_auth)
     .bind(ciphertext)
     .bind(config.idempotency_header)

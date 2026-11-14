@@ -8,12 +8,14 @@
 //! call, with the source id as associated data — a ciphertext copied onto another source row
 //! fails authentication instead of silently sending one upstream's credential to another.
 //!
-//! Two reference behaviours are deliberately NOT ported here and belong to the slice that owns
-//! the egress client: the operator host allow-list (`MCP_SOURCE_ALLOWED_HOSTS`, absent from
-//! [`crate::config::WorkerSettings`]) and the resolved-address pinning of `src/broker/egress.py`.
-//! The tenant-side syntax check the reference performs before those (`checked_tenant_url`) is
-//! ported, because it needs no settings. The reference's short-TTL row cache is not ported
-//! either: every call reads the row, so a disabled source is denied immediately.
+//! The destination policy of `src/sources/guard.py` is ported here: the operator host
+//! allow-list (`MCP_SOURCE_ALLOWED_HOSTS`, [`crate::config::WorkerSettings::source_allowed_hosts`])
+//! and the origin checks shared by registration and call time. One reference behaviour is
+//! deliberately NOT ported here and belongs to the slice that owns the egress client: the
+//! resolved-address pinning of `src/broker/egress.py`. The tenant-side syntax check the
+//! reference performs before the allow-list (`checked_tenant_url`) is ported as well. The
+//! reference's short-TTL row cache is not ported either: every call reads the row, so a disabled
+//! source is denied immediately.
 //!
 //! Unlike the reference this port has no `secrecy` crate: the token is a `String` in
 //! [`ResolvedSource`], whose `Debug` implementation redacts it. Nothing here logs a secret.
@@ -456,14 +458,25 @@ impl fmt::Debug for ResolvedSource {
 pub struct SourceRegistry {
     pool: PgPool,
     key: Option<[u8; 32]>,
+    /// The operator's `MCP_SOURCE_ALLOWED_HOSTS`; empty allows no source host.
+    allowed_hosts: Vec<String>,
 }
 
 impl SourceRegistry {
-    /// Bind the registry to a pool and the configured `MCP_SOURCE_SECRET_KEY` (already
-    /// validated by [`crate::config::WorkerSettings`]; decoded here, fail-closed when absent).
-    pub fn new(pool: PgPool, source_secret_key: Option<&str>) -> Result<Self, SourceError> {
+    /// Bind the registry to a pool, the configured `MCP_SOURCE_SECRET_KEY` (already validated by
+    /// [`crate::config::WorkerSettings`]; decoded here, fail-closed when absent) and the operator
+    /// host allow-list.
+    pub fn new(
+        pool: PgPool,
+        source_secret_key: Option<&str>,
+        allowed_hosts: Vec<String>,
+    ) -> Result<Self, SourceError> {
         let key = source_secret_key.map(crypto::decode_key).transpose()?;
-        Ok(Self { pool, key })
+        Ok(Self {
+            pool,
+            key,
+            allowed_hosts,
+        })
     }
 
     /// The active source `(owner, key)`, or a denial: missing, disabled, owned by someone else,
@@ -473,8 +486,9 @@ impl SourceRegistry {
         let row = sqlx::query(
             "SELECT source_id::text AS source_id, \
                     owner_tenant_id::text AS owner_tenant_id, \
-                    source_key, revision, status, base_url, auth, token_ciphertext, \
-                    idempotency_header, ca_file, max_request_bytes, max_response_bytes, \
+                    source_key, revision, status, base_url, allow_internal_http, auth, \
+                    token_ciphertext, idempotency_header, ca_file, max_request_bytes, \
+                    max_response_bytes, \
                     (owner_tenant_id <> public.mcp_platform_tenant()) AS tenant_owned \
              FROM public.mcp_sources WHERE owner_tenant_id = $1::uuid AND source_key = $2",
         )
@@ -497,10 +511,28 @@ impl SourceRegistry {
         let auth = SourceAuth::parse(&row.try_get::<Value, _>("auth")?)?;
         let base_url: String = row.try_get("base_url")?;
         let tenant_owned: bool = row.try_get("tenant_owned")?;
+        let allow_internal_http: bool = row.try_get("allow_internal_http")?;
+        let ca_file: Option<String> = row.try_get("ca_file")?;
         if tenant_owned {
-            // The reference's tenant-side half of `get` (`registry.py:72-79`); the operator
-            // allow-list and the port bound are re-checked by the egress client.
+            // The reference's tenant-side half of `get` (`registry.py:72-83`): public https only,
+            // and a licence source additionally needs an operator-approved host.
+            if allow_internal_http || ca_file.is_some() {
+                return Err(SourceError::Denied("tenant source is public https only"));
+            }
             checked_tenant_url(&base_url, true)?;
+            if auth.kind() == "licence" && !host_allowed(&base_url, &self.allowed_hosts) {
+                return Err(SourceError::Denied(
+                    "licence sources need an operator-approved host",
+                ));
+            }
+        } else {
+            // The reference's platform-side `enforce` (`guard.py:80-84`).
+            checked_source_base_url(&base_url, allow_internal_http)?;
+            if !host_allowed(&base_url, &self.allowed_hosts) {
+                return Err(SourceError::Denied(
+                    "source host is not in the allowed host list",
+                ));
+            }
         }
         let token = if auth.needs_secret() {
             let Some(key) = self.key.as_ref() else {
@@ -522,7 +554,7 @@ impl SourceRegistry {
             auth,
             token,
             idempotency_header: row.try_get("idempotency_header")?,
-            ca_file: row.try_get("ca_file")?,
+            ca_file,
             max_request_bytes: bound(row.try_get::<Option<i32>, _>("max_request_bytes")?),
             max_response_bytes: bound(row.try_get::<Option<i32>, _>("max_response_bytes")?),
             revision: row.try_get("revision")?,
@@ -671,4 +703,187 @@ fn is_ip_literal(host: &str) -> bool {
     }
     let last = host.rsplit('.').next().unwrap_or(host);
     last.bytes().all(|byte| byte.is_ascii_digit()) || last.starts_with("0x")
+}
+
+/// A scheme's default port (`guard.py:16`): only the two schemes a source may use.
+fn default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "https" => Some(443),
+        "http" => Some(80),
+        _ => None,
+    }
+}
+
+/// Whether `base_url`'s origin is named by the operator allow-list (`guard.py:55-77`).
+///
+/// A bare entry names the scheme's default port; a non-default port is allowed only by an
+/// explicit `host:port` entry. A `*.suffix` entry covers subdomains but never the apex.
+pub(crate) fn host_allowed(base_url: &str, allowed: &[String]) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let port = url.port();
+    let non_default = port.is_some_and(|port| Some(port) != default_port(url.scheme()));
+    for entry in allowed {
+        let entry = entry.trim().to_ascii_lowercase();
+        if entry.is_empty() {
+            continue;
+        }
+        let (pattern, entry_port) = match entry.split_once(':') {
+            Some((pattern, port)) => (pattern, Some(port)),
+            None => (entry.as_str(), None),
+        };
+        if non_default {
+            // A non-default port is allowed only by an explicit `host:port` entry.
+            if entry_port != port.map(|port| port.to_string()).as_deref() {
+                continue;
+            }
+        } else if entry_port.is_some() {
+            continue;
+        }
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            // `pattern[1:]` keeps the leading dot, so the apex is not covered.
+            if host.ends_with(suffix) && host.len() > suffix.len() {
+                return true;
+            }
+        } else if host == pattern {
+            return true;
+        }
+    }
+    false
+}
+
+/// The reference's `checked_base_url` (`guard.py:19-40`): an https origin, or http only when the
+/// row says `allow_internal_http`; a DNS name with an optional fixed path prefix; never userinfo,
+/// a query, a fragment or an address literal. Raises the reference's one refusal.
+pub(crate) fn checked_source_base_url(
+    value: &str,
+    allow_internal_http: bool,
+) -> Result<(), SourceError> {
+    let deny = || SourceError::Denied("source requires an explicitly approved origin");
+    let url = reqwest::Url::parse(value).map_err(|_| deny())?;
+    let scheme_ok = match url.scheme() {
+        "https" => true,
+        "http" => allow_internal_http,
+        _ => false,
+    };
+    if !scheme_ok
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || value.contains('@')
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port().is_some_and(|port| !(1..=65535).contains(&port))
+    {
+        return Err(deny());
+    }
+    let host = url.host_str().ok_or_else(deny)?;
+    static HOST: OnceLock<Regex> = OnceLock::new();
+    static PATH: OnceLock<Regex> = OnceLock::new();
+    if !compiled(&HOST, r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$").is_match(host)
+        || is_ip_literal(host)
+        || !compiled(&PATH, r"^(?:/[a-z0-9][a-z0-9_-]*)*/?$").is_match(url.path())
+    {
+        return Err(deny());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{checked_source_base_url, host_allowed};
+
+    fn allowed(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|entry| (*entry).to_owned()).collect()
+    }
+
+    #[test]
+    fn host_allowed_matches_exact_hosts_case_insensitively() {
+        assert!(host_allowed(
+            "https://api.example.test/v1",
+            &allowed(&["api.example.test"])
+        ));
+        assert!(host_allowed(
+            "https://API.Example.TEST",
+            &allowed(&[" api.example.test "])
+        ));
+        assert!(!host_allowed(
+            "https://other.example.test",
+            &allowed(&["api.example.test"])
+        ));
+        assert!(!host_allowed("https://api.example.test", &allowed(&[])));
+    }
+
+    #[test]
+    fn a_wildcard_covers_subdomains_but_never_the_apex() {
+        let list = allowed(&["*.b.example"]);
+        assert!(host_allowed("https://a.b.example", &list));
+        assert!(host_allowed("https://deep.a.b.example", &list));
+        assert!(!host_allowed("https://b.example", &list));
+        assert!(!host_allowed("https://notb.example", &list));
+    }
+
+    #[test]
+    fn a_port_entry_is_needed_only_off_the_scheme_default() {
+        assert!(host_allowed(
+            "https://api.example.test",
+            &allowed(&["api.example.test"])
+        ));
+        assert!(!host_allowed(
+            "https://api.example.test",
+            &allowed(&["api.example.test:443"])
+        ));
+        assert!(host_allowed(
+            "http://api.example.test:80",
+            &allowed(&["api.example.test"])
+        ));
+        assert!(!host_allowed(
+            "http://api.example.test:8080",
+            &allowed(&["api.example.test"])
+        ));
+        assert!(host_allowed(
+            "http://api.example.test:8080",
+            &allowed(&["api.example.test:8080"])
+        ));
+        assert!(!host_allowed(
+            "https://example.test:8443",
+            &allowed(&["*.example.test:8443"])
+        ));
+        assert!(host_allowed(
+            "https://api.example.test:8443",
+            &allowed(&["*.example.test:8443"])
+        ));
+    }
+
+    #[test]
+    fn a_source_origin_is_https_or_an_allowed_internal_http() {
+        assert!(checked_source_base_url("https://api.example.test", false).is_ok());
+        assert!(checked_source_base_url("https://api.example.test/v1/a_b-1/", false).is_ok());
+        assert!(checked_source_base_url("http://api.example.test", true).is_ok());
+        assert!(checked_source_base_url("http://api.example.test", false).is_err());
+        // An address literal is refused even when internal http is allowed.
+        assert!(checked_source_base_url("http://127.0.0.1:9000", true).is_err());
+        assert!(checked_source_base_url("https://[::1]", false).is_err());
+    }
+
+    #[test]
+    fn a_source_origin_refuses_userinfo_queries_fragments_and_bad_paths() {
+        for value in [
+            "https://user@api.example.test",
+            "https://user:pass@api.example.test",
+            "https://api.example.test/?x=1",
+            "https://api.example.test/#x",
+            "https://127.0.0.1",
+            "https://api.example.test/V1",
+            "https://api.example.test/a b",
+            "ftp://api.example.test",
+        ] {
+            assert!(
+                checked_source_base_url(value, true).is_err(),
+                "{value} must be refused"
+            );
+        }
+    }
 }

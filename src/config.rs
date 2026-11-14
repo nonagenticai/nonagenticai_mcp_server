@@ -38,7 +38,7 @@ pub struct Config {
     /// `CATALOG_PAGE_SIZE` (optional, default 10, 1 to 100): the management catalog page bound.
     pub catalog_page_size: u32,
     /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
-    /// digests a `kata_python` tool may name, e.g. `["registry.internal:5000/runner@sha256:…"]`.
+    /// digests a `kata_python` tool may name, e.g. `["registry.example/runner@sha256:…"]`.
     /// A tool with any other digest is refused.
     pub approved_runner_images: Vec<String>,
     /// The `MCP_MAX_PACKAGE_*` bounds a submitted tool package is validated against.
@@ -379,7 +379,7 @@ pub struct WorkerSettings {
     /// execution is enabled.
     pub runner_image_digest: Option<String>,
     /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
-    /// digests a `kata_python` tool may name, e.g. `["registry.internal:5000/runner@sha256:…"]`.
+    /// digests a `kata_python` tool may name, e.g. `["registry.example/runner@sha256:…"]`.
     /// Must be non-empty when execution is enabled.
     pub approved_runner_images: Vec<String>,
     /// `MCP_RUN_MEMORY_REQUEST_MI` (32 to 1024, default 256): runner memory request, MiB.
@@ -397,6 +397,10 @@ pub struct WorkerSettings {
     /// `MCP_SOURCE_SECRET_KEY` (optional): the AES-256-GCM key for stored source tokens, 32
     /// bytes as padded or unpadded base64url.
     pub source_secret_key: Option<String>,
+    /// `MCP_SOURCE_ALLOWED_HOSTS` (comma-separated, default empty): the operator's source host
+    /// allow-list — exact hosts, `*.suffix` patterns, and `host:port` for a non-default port.
+    /// An empty list allows no source host.
+    pub source_allowed_hosts: Vec<String>,
     /// `MCP_BUILDER_OAUTH_TOKEN_MAX_TTL` (30 to 86400 seconds, default 3600): the longest an
     /// OAuth token the tool builder obtains may be reused.
     pub builder_oauth_token_max_ttl: Duration,
@@ -444,6 +448,7 @@ impl Default for WorkerSettings {
             credential_bundle_file: None,
             licence_minter: MinterSettings::default(),
             source_secret_key: None,
+            source_allowed_hosts: Vec::new(),
             builder_oauth_token_max_ttl: Duration::from_secs(3_600),
             builder_source_calls_per_minute: 60,
             builder_source_concurrency: 2,
@@ -532,6 +537,7 @@ impl WorkerSettings {
             credential_bundle_file: get("MCP_CREDENTIAL_BUNDLE_FILE").map(PathBuf::from),
             licence_minter: MinterSettings::from_lookup(|key| get(key))?,
             source_secret_key: get("MCP_SOURCE_SECRET_KEY"),
+            source_allowed_hosts: source_allowed_hosts(get("MCP_SOURCE_ALLOWED_HOSTS"))?,
             builder_oauth_token_max_ttl: Duration::from_secs(u64_setting(
                 &get,
                 "MCP_BUILDER_OAUTH_TOKEN_MAX_TTL",
@@ -930,7 +936,7 @@ fn checked_http_url(name: &'static str, value: &str) -> Result<(), ConfigError> 
     Ok(())
 }
 
-/// A JSON list of strings, e.g. `["registry.internal:5000/runner@sha256:…"]`.
+/// A JSON list of strings, e.g. `["registry.example/runner@sha256:…"]`.
 ///
 /// The reference models the approved runner images as a pydantic-settings `tuple[str, ...]`,
 /// which is read as JSON, so a comma-separated value is refused rather than accepted as one
@@ -943,6 +949,53 @@ fn json_string_list(raw: Option<String>, name: &'static str) -> Result<Vec<Strin
         name,
         reason: format!("expected a JSON list of runner image digests: {e}"),
     })
+}
+
+/// `MCP_SOURCE_ALLOWED_HOSTS` (`config.py:231-240`): comma-separated entries, each trimmed and
+/// lowercased and empty ones dropped; at most 256 entries and only pattern-shaped entries.
+/// Unset or empty is a valid empty list, which allows no source host.
+fn source_allowed_hosts(raw: Option<String>) -> Result<Vec<String>, ConfigError> {
+    let hosts: Vec<String> = raw
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if hosts.len() > 256 || hosts.iter().any(|host| !source_host_entry(host)) {
+        return Err(ConfigError::Invalid {
+            name: "MCP_SOURCE_ALLOWED_HOSTS",
+            reason: "invalid source host allow-list entry".into(),
+        });
+    }
+    Ok(hosts)
+}
+
+/// One allow-list entry (`config.py:237`): an optional `*.` prefix, then
+/// `[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?`, then an optional `:[0-9]{1,5}`. The caller has
+/// lowercased the entry; the port bound is the reference's string syntax, not a range.
+fn source_host_entry(entry: &str) -> bool {
+    let (host, port) = match entry.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (entry, None),
+    };
+    if let Some(port) = port
+        && (!(1..=5).contains(&port.len()) || !port.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return false;
+    }
+    let host = host.strip_prefix("*.").unwrap_or(host).as_bytes();
+    let (Some(first), Some(last)) = (host.first(), host.last()) else {
+        return false;
+    };
+    let label = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    (1..=253).contains(&host.len())
+        && label(*first)
+        && (host.len() == 1
+            || (label(*last)
+                && host[1..host.len() - 1]
+                    .iter()
+                    .all(|byte| label(*byte) || *byte == b'.' || *byte == b'-')))
 }
 
 fn tenant_ids(raw: Option<String>) -> Result<Vec<Rfc4122Uuid>, ConfigError> {
@@ -1242,8 +1295,9 @@ mod tests {
         assert_eq!(configured.max_package_bytes, 20);
     }
 
-    /// The live ConfigMap's value: a JSON array string holding one runner image digest.
-    const LIVE_DIGEST: &str = "registry.internal:5000/nonagenticai_mcp_server_runner@sha256:f457ca27659ac4fbd7c3b84f817c6bbb3d694bfe3bc27f4c7f0192a9a1128d6d";
+    /// The live value's shape: a JSON array string holding one runner image digest. The host is a
+    /// placeholder because this repository is public and the live registry is internal.
+    const LIVE_DIGEST: &str = "registry.example/runner@sha256:f457ca27659ac4fbd7c3b84f817c6bbb3d694bfe3bc27f4c7f0192a9a1128d6d";
 
     #[test]
     fn approved_runner_images_default_empty_and_parse_a_json_list() {
@@ -2202,6 +2256,75 @@ mod tests {
                 name: "MCP_SOURCE_SECRET_KEY",
                 reason: "must be base64url".into(),
             }
+        );
+    }
+
+    #[test]
+    fn source_allowed_hosts_split_trim_and_lowercase() {
+        let settings = worker_settings(&[(
+            "MCP_SOURCE_ALLOWED_HOSTS",
+            "a.example, *.B.Example ,, api.example:8443 ",
+        )])
+        .expect("valid allow-list");
+        assert_eq!(
+            settings.source_allowed_hosts,
+            ["a.example", "*.b.example", "api.example:8443"]
+        );
+        // Unset and empty both allow nothing rather than refusing startup.
+        assert!(
+            worker_settings(&[])
+                .expect("defaults")
+                .source_allowed_hosts
+                .is_empty()
+        );
+        assert!(
+            worker_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", " , ")])
+                .expect("empty list")
+                .source_allowed_hosts
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn source_allowed_hosts_refuse_a_malformed_entry_or_more_than_256() {
+        for value in [
+            "bad host",
+            "*",
+            "*.",
+            "a.example:",
+            "a.example:port",
+            "a..example?",
+        ] {
+            assert_eq!(
+                worker_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", value)]).unwrap_err(),
+                ConfigError::Invalid {
+                    name: "MCP_SOURCE_ALLOWED_HOSTS",
+                    reason: "invalid source host allow-list entry".into(),
+                },
+                "MCP_SOURCE_ALLOWED_HOSTS={value} must be refused"
+            );
+        }
+        let many = (0..257)
+            .map(|index| format!("host{index}.example"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            worker_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", many.as_str())]).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_SOURCE_ALLOWED_HOSTS",
+                reason: "invalid source host allow-list entry".into(),
+            }
+        );
+        let full = (0..256)
+            .map(|index| format!("host{index}.example"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            worker_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", full.as_str())])
+                .expect("256 entries are allowed")
+                .source_allowed_hosts
+                .len(),
+            256
         );
     }
 }

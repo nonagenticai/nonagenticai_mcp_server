@@ -112,26 +112,30 @@ impl CryptoFixture {
 
 /// One row through the table's own constraints. `token_set_at` is set exactly when a ciphertext
 /// is stored (`mcp_sources_check1`), as the registration path does.
+#[allow(clippy::too_many_arguments)]
 async fn insert_source(
     fixture: &Fixture,
     source_id: &str,
     owner: &str,
     source_key: &str,
+    base_url: &str,
+    allow_internal_http: bool,
     auth: Value,
     ciphertext: Option<&[u8]>,
     max_request_bytes: Option<i32>,
 ) {
     sqlx::query(
         "INSERT INTO public.mcp_sources(\
-         source_id,owner_tenant_id,source_key,base_url,auth,token_ciphertext,token_set_at,\
-         max_request_bytes,created_by,updated_by) \
-         VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,\
-         CASE WHEN $6::bytea IS NULL THEN NULL ELSE clock_timestamp() END,$7,$8,$8)",
+         source_id,owner_tenant_id,source_key,base_url,allow_internal_http,auth,token_ciphertext,\
+         token_set_at,max_request_bytes,created_by,updated_by) \
+         VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,\
+         CASE WHEN $7::bytea IS NULL THEN NULL ELSE clock_timestamp() END,$8,$9,$9)",
     )
     .bind(source_id)
     .bind(owner)
     .bind(source_key)
-    .bind("https://api.example.test")
+    .bind(base_url)
+    .bind(allow_internal_http)
     .bind(auth)
     .bind(ciphertext.map(|blob| blob.to_vec()))
     .bind(max_request_bytes)
@@ -153,6 +157,8 @@ async fn the_python_oracles_ciphertext_resolves_with_the_rows_bounds() {
         &sealed.source_id,
         TENANT,
         "synthetic_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "static_bearer"}),
         Some(&sealed.ciphertext),
         Some(4096),
@@ -163,7 +169,8 @@ async fn the_python_oracles_ciphertext_resolves_with_the_rows_bounds() {
         sealed.ciphertext.len(),
         sealed.nonce_bytes + 16 + sealed.token.len()
     );
-    let registry = SourceRegistry::new(fixture.pool.clone(), Some(&sealed.key)).expect("registry");
+    let registry =
+        SourceRegistry::new(fixture.pool.clone(), Some(&sealed.key), Vec::new()).expect("registry");
     let source = registry
         .get(&uuid(TENANT), "synthetic_source")
         .await
@@ -193,12 +200,15 @@ async fn a_blob_encrypted_for_another_source_fails() {
         &sealed.wrong_source_id,
         TENANT,
         "swapped_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "static_bearer"}),
         Some(&sealed.ciphertext),
         None,
     )
     .await;
-    let registry = SourceRegistry::new(fixture.pool.clone(), Some(&sealed.key)).expect("registry");
+    let registry =
+        SourceRegistry::new(fixture.pool.clone(), Some(&sealed.key), Vec::new()).expect("registry");
     let refused = registry.get(&uuid(TENANT), "swapped_source").await;
     assert!(
         matches!(&refused, Err(SourceError::Crypto)),
@@ -217,12 +227,14 @@ async fn a_missing_key_denies_every_stored_secret() {
         &sealed.source_id,
         TENANT,
         "synthetic_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "static_bearer"}),
         Some(&sealed.ciphertext),
         None,
     )
     .await;
-    let registry = SourceRegistry::new(fixture.pool.clone(), None).expect("registry");
+    let registry = SourceRegistry::new(fixture.pool.clone(), None, Vec::new()).expect("registry");
     assert!(matches!(
         registry.get(&uuid(TENANT), "synthetic_source").await,
         Err(SourceError::Denied(_))
@@ -238,12 +250,14 @@ async fn a_missing_or_disabled_source_denies() {
         SOURCE_A,
         TENANT,
         "synthetic_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "none"}),
         None,
         None,
     )
     .await;
-    let registry = SourceRegistry::new(fixture.pool.clone(), None).expect("registry");
+    let registry = SourceRegistry::new(fixture.pool.clone(), None, Vec::new()).expect("registry");
     assert!(matches!(
         registry.get(&uuid(TENANT), "absent_source").await,
         Err(SourceError::Denied(_))
@@ -281,6 +295,8 @@ async fn tenant_owned_follows_the_owners_identity() {
         SOURCE_A,
         TENANT,
         "tenant_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "none"}),
         None,
         None,
@@ -291,12 +307,15 @@ async fn tenant_owned_follows_the_owners_identity() {
         SOURCE_B,
         DB_PLATFORM,
         "platform_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "none"}),
         None,
         None,
     )
     .await;
-    let registry = SourceRegistry::new(fixture.pool.clone(), None).expect("registry");
+    let registry = SourceRegistry::new(fixture.pool.clone(), None, vec!["api.example.test".into()])
+        .expect("registry");
     assert!(
         registry
             .get(&uuid(TENANT), "tenant_source")
@@ -315,6 +334,152 @@ async fn tenant_owned_follows_the_owners_identity() {
 }
 
 #[tokio::test]
+async fn a_platform_source_needs_an_allowed_host() {
+    let fixture = Fixture::new().await;
+    insert_source(
+        &fixture,
+        SOURCE_A,
+        DB_PLATFORM,
+        "platform_source",
+        "https://not-allowed.example",
+        false,
+        json!({"kind": "none"}),
+        None,
+        None,
+    )
+    .await;
+    let registry = SourceRegistry::new(fixture.pool.clone(), None, vec!["api.example.test".into()])
+        .expect("registry");
+    assert!(matches!(
+        registry.get(&uuid(DB_PLATFORM), "platform_source").await,
+        Err(SourceError::Denied(_))
+    ));
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_platform_source_is_http_only_when_the_row_says_so() {
+    let fixture = Fixture::new().await;
+    for (source_id, key, allow_internal_http) in [
+        (SOURCE_A, "internal_source", true),
+        (SOURCE_B, "refused_source", false),
+    ] {
+        insert_source(
+            &fixture,
+            source_id,
+            DB_PLATFORM,
+            key,
+            "http://internal.example.test",
+            allow_internal_http,
+            json!({"kind": "none"}),
+            None,
+            None,
+        )
+        .await;
+    }
+    let registry = SourceRegistry::new(
+        fixture.pool.clone(),
+        None,
+        vec!["internal.example.test".into()],
+    )
+    .expect("registry");
+    assert!(
+        registry
+            .get(&uuid(DB_PLATFORM), "internal_source")
+            .await
+            .expect("an internal http origin the row allows")
+            .base_url
+            .starts_with("http://")
+    );
+    assert!(matches!(
+        registry.get(&uuid(DB_PLATFORM), "refused_source").await,
+        Err(SourceError::Denied(_))
+    ));
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_tenant_source_needs_the_allow_list_only_for_a_licence() {
+    let fixture = Fixture::new().await;
+    insert_source(
+        &fixture,
+        SOURCE_A,
+        TENANT,
+        "public_source",
+        "https://api.example.test",
+        false,
+        json!({"kind": "none"}),
+        None,
+        None,
+    )
+    .await;
+    insert_source(
+        &fixture,
+        SOURCE_B,
+        TENANT,
+        "licence_source",
+        "https://api.example.test",
+        false,
+        json!({"kind": "licence", "app_key": "synthetic"}),
+        None,
+        None,
+    )
+    .await;
+    let empty = SourceRegistry::new(fixture.pool.clone(), None, Vec::new()).expect("registry");
+    assert!(
+        empty
+            .get(&uuid(TENANT), "public_source")
+            .await
+            .expect("a non-licence tenant source needs no operator host")
+            .tenant_owned
+    );
+    assert!(matches!(
+        empty.get(&uuid(TENANT), "licence_source").await,
+        Err(SourceError::Denied(_))
+    ));
+    let listed = SourceRegistry::new(fixture.pool.clone(), None, vec!["api.example.test".into()])
+        .expect("registry");
+    assert!(
+        listed
+            .get(&uuid(TENANT), "licence_source")
+            .await
+            .expect("an allowed licence host")
+            .tenant_owned
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_tenant_source_may_not_allow_internal_http() {
+    let fixture = Fixture::new().await;
+    // The table forbids the state outright, so drop its check: the registry's own guard must
+    // still refuse the row before it can be used.
+    sqlx::query("ALTER TABLE public.mcp_sources DROP CONSTRAINT mcp_sources_tenant_https")
+        .execute(&fixture.pool)
+        .await
+        .expect("drop the tenant https check for this fixture");
+    insert_source(
+        &fixture,
+        SOURCE_A,
+        TENANT,
+        "internal_source",
+        "https://api.example.test",
+        true,
+        json!({"kind": "none"}),
+        None,
+        None,
+    )
+    .await;
+    let registry = SourceRegistry::new(fixture.pool.clone(), None, vec!["api.example.test".into()])
+        .expect("registry");
+    assert!(matches!(
+        registry.get(&uuid(TENANT), "internal_source").await,
+        Err(SourceError::Denied(_))
+    ));
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn a_reserved_static_header_is_refused_at_read_time() {
     let fixture = Fixture::new().await;
     let sealed = CryptoFixture::load();
@@ -325,12 +490,15 @@ async fn a_reserved_static_header_is_refused_at_read_time() {
         SOURCE_A,
         TENANT,
         "header_source",
+        "https://api.example.test",
+        false,
         json!({"kind": "static_header", "header": "Authorization"}),
         Some(&sealed.ciphertext),
         None,
     )
     .await;
-    let registry = SourceRegistry::new(fixture.pool.clone(), Some(&sealed.key)).expect("registry");
+    let registry =
+        SourceRegistry::new(fixture.pool.clone(), Some(&sealed.key), Vec::new()).expect("registry");
     assert!(matches!(
         registry.get(&uuid(TENANT), "header_source").await,
         Err(SourceError::Denied(_))

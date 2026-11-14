@@ -638,8 +638,9 @@ fn transport(operation: &str, error: kube::Error) -> BackendError {
 mod tests {
     use super::*;
 
-    /// The digest the live ConfigMap approves.
-    const DIGEST: &str = "registry.internal:5000/nonagenticai_mcp_server_runner@sha256:f457ca27659ac4fbd7c3b84f817c6bbb3d694bfe3bc27f4c7f0192a9a1128d6d";
+    /// A representative approved digest: the live value's shape (one digest in a JSON array).
+    /// The host is a placeholder because this repository is public and the live registry is internal.
+    const DIGEST: &str = "registry.example/runner@sha256:f457ca27659ac4fbd7c3b84f817c6bbb3d694bfe3bc27f4c7f0192a9a1128d6d";
 
     fn parsed_settings(raw: &str) -> WorkerSettings {
         WorkerSettings::from_lookup(|key| match key {
