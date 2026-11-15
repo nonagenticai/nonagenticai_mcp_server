@@ -361,7 +361,9 @@ impl SendError {
 fn python_ensure_ascii(encoded: &str) -> String {
     let mut out = String::with_capacity(encoded.len());
     for character in encoded.chars() {
-        if (character as u32) < 0x80 {
+        // Python's `[^\x20-\x7e]`: the printable ASCII range only, so DEL (0x7F) is escaped
+        // too, even though it is not a control character serde would have escaped for us.
+        if (0x20..=0x7e).contains(&(character as u32)) {
             out.push(character);
             continue;
         }

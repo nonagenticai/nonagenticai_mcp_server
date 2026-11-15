@@ -319,7 +319,7 @@ impl ExecutionSettings {
 /// validates its cross-setting rules at startup; [`WorkerSettings::validate`] mirrors them and
 /// adds the worker-start rule that a process needs an explicit credential source
 /// (`src/execution/worker.py:run`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WorkerSettings {
     /// `MCP_WORKER_PROBE_PORT` (1024 to 65535, default 8034): the worker's health probe port.
     pub probe_port: u16,
@@ -412,6 +412,68 @@ pub struct WorkerSettings {
     pub builder_source_concurrency: u32,
     /// `MCP_BUILDER_SERVICE_LIMITS_FILE` (optional): the per-service builder rate-limit table.
     pub service_limits_file: Option<PathBuf>,
+}
+
+/// One field of this struct is a secret (`source_secret_key`, the AES-256-GCM source key; the
+/// reference declares it `SecretStr`), so `Debug` is written by hand: a stray `?settings` must
+/// not print it. Every other field is ordinary configuration.
+impl std::fmt::Debug for WorkerSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkerSettings")
+            .field("probe_port", &self.probe_port)
+            .field("max_inflight", &self.max_inflight)
+            .field("global_slots", &self.global_slots)
+            .field("per_tenant_slots", &self.per_tenant_slots)
+            .field("run_start_timeout", &self.run_start_timeout)
+            .field("run_max", &self.run_max)
+            .field("lease", &self.lease)
+            .field("heartbeat", &self.heartbeat)
+            .field("reconcile", &self.reconcile)
+            .field("api_max_inflight", &self.api_max_inflight)
+            .field("api_concurrency_global", &self.api_concurrency_global)
+            .field(
+                "api_concurrency_per_service",
+                &self.api_concurrency_per_service,
+            )
+            .field("api_max_calls_per_minute", &self.api_max_calls_per_minute)
+            .field("max_api_calls_per_run", &self.max_api_calls_per_run)
+            .field("api_timeout", &self.api_timeout)
+            .field("api_max_response_bytes", &self.api_max_response_bytes)
+            .field("max_frame_bytes", &self.max_frame_bytes)
+            .field("max_output_bytes", &self.max_output_bytes)
+            .field("max_log_bytes", &self.max_log_bytes)
+            .field("max_frames", &self.max_frames)
+            .field("run_namespace", &self.run_namespace)
+            .field("kata_runtime_class", &self.kata_runtime_class)
+            .field("runner_image_digest", &self.runner_image_digest)
+            .field("approved_runner_images", &self.approved_runner_images)
+            .field("run_memory_request_mi", &self.run_memory_request_mi)
+            .field("run_memory_limit_mi", &self.run_memory_limit_mi)
+            .field("run_cpu_request", &self.run_cpu_request)
+            .field("run_cpu_limit", &self.run_cpu_limit)
+            .field("credential_bundle_file", &self.credential_bundle_file)
+            .field("licence_minter", &self.licence_minter)
+            .field(
+                "source_secret_key",
+                &self.source_secret_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("source_allowed_hosts", &self.source_allowed_hosts)
+            .field(
+                "builder_oauth_token_max_ttl",
+                &self.builder_oauth_token_max_ttl,
+            )
+            .field(
+                "builder_source_calls_per_minute",
+                &self.builder_source_calls_per_minute,
+            )
+            .field(
+                "builder_source_concurrency",
+                &self.builder_source_concurrency,
+            )
+            .field("service_limits_file", &self.service_limits_file)
+            .finish()
+    }
 }
 
 impl Default for WorkerSettings {
@@ -2511,6 +2573,35 @@ mod tests {
         assert_eq!(settings.fr_channel_secret.as_deref(), Some("channel"));
         // The probe port is the driver's own name, never the worker's 8034.
         assert_eq!(settings.worker.probe_port, 8_034);
+    }
+
+    #[test]
+    fn the_driver_settings_redact_every_secret() {
+        // Built here rather than written as a literal: the source key is a 32-byte AES key and
+        // a base64url constant in the tree would (rightly) trip the secret scanner.
+        use base64::Engine as _;
+        let source_key =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode((0u8..32).collect::<Vec<u8>>());
+        let settings = driver_settings(&[
+            ("MCP_N8N_API_KEY", "n8n-api-key-value"),
+            ("MCP_N8N_WEBHOOK_SECRET", "n8n-webhook-secret-value"),
+            ("MCP_FR_CHANNEL_SECRET", "fr-channel-secret-value"),
+            ("MCP_SOURCE_SECRET_KEY", source_key.as_str()),
+        ])
+        .expect("settings parse");
+        let debug = format!("{settings:?}");
+        for secret in [
+            "n8n-api-key-value",
+            "n8n-webhook-secret-value",
+            "fr-channel-secret-value",
+            source_key.as_str(),
+        ] {
+            assert!(
+                !debug.contains(secret),
+                "a secret reached Debug: {secret} in {debug}"
+            );
+        }
+        assert!(debug.contains("<redacted>"), "{debug}");
     }
 
     #[test]

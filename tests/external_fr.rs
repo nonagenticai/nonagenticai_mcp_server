@@ -966,7 +966,7 @@ async fn the_envelope_escapes_non_ascii_like_the_reference() {
     let row = worker_row(
         RUN,
         TENANT,
-        json!({ "title": "café ☕" }),
+        json!({ "title": "café ☕\u{7f}🙂" }),
         Some(agent()),
         project_authority(),
         None,
@@ -976,8 +976,10 @@ async fn the_envelope_escapes_non_ascii_like_the_reference() {
 
     let body = &server.requests()[0].body;
     let text = String::from_utf8(body.clone()).expect("the envelope is ASCII on the wire");
+    // `[^\x20-\x7e]` escaped, lowercase hex: BMP as one unit, DEL as \u007f (serde would have
+    // left it raw), and the astral character as its UTF-16 surrogate pair.
     assert!(
-        text.contains("caf\\u00e9 \\u2615"),
+        text.contains("caf\\u00e9 \\u2615\\u007f\\ud83d\\ude42"),
         "the envelope escapes non-ASCII: {text}"
     );
     // The text inside the envelope is `ensure_ascii=False`, so it is escaped by the envelope
@@ -987,6 +989,18 @@ async fn the_envelope_escapes_non_ascii_like_the_reference() {
     let envelope: Value = serde_json::from_slice(body).expect("envelope json");
     assert_eq!(
         envelope["text"],
-        json!("projects.create {\"title\":\"café ☕\",\"project_type\":\"it\"}")
+        json!("projects.create {\"title\":\"café ☕\u{7f}🙂\",\"project_type\":\"it\"}")
     );
+}
+
+/// The channel secret is a secret: `Debug` must not print it.
+#[test]
+fn the_fr_settings_redact_the_channel_secret() {
+    let settings = FrSettings {
+        base_url: Some("http://fr.test/".to_owned()),
+        channel_secret: Some(SECRET.to_owned()),
+    };
+    let debug = format!("{settings:?}");
+    assert!(!debug.contains(SECRET), "{debug}");
+    assert!(debug.contains("<redacted>"), "{debug}");
 }

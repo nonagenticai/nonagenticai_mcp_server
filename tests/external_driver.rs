@@ -49,6 +49,8 @@ struct Fake {
     polls: Mutex<Vec<Poll>>,
     cancels: Mutex<u32>,
     slow_start: Mutex<Option<Duration>>,
+    /// Answer `start` with an UNKNOWN outcome (the request may have reached the upstream).
+    start_unknown: Mutex<bool>,
 }
 
 impl Fake {
@@ -81,6 +83,9 @@ impl ExternalAdapter for Fake {
         let delay = *self.slow_start.lock().expect("slow");
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
+        }
+        if *self.start_unknown.lock().expect("start_unknown") {
+            return Err(ExternalStartError::unknown());
         }
         match self.start.lock().expect("start").clone() {
             Some(Ok(reference)) => Ok(reference),
@@ -745,5 +750,50 @@ async fn an_empty_progress_text_writes_nothing() {
             .await
             .contains(&"phase".to_owned())
     );
+    fixture.finish().await;
+}
+
+/// A transport failure after the request may have been sent is an UNKNOWN outcome: the run is
+/// `interrupted` and it is never dispatched again. This is the at-most-once contract's other
+/// half — `failed` would claim the upstream never got it.
+#[tokio::test]
+async fn an_unknown_start_outcome_interrupts_and_is_never_resent() {
+    let fixture = Fixture::new().await;
+    binding_fixture(&fixture).await;
+    let fake = Fake::new();
+    *fake.start_unknown.lock().expect("start_unknown") = true;
+    let driver = driver(&fixture, Arc::clone(&fake), settings(), None);
+    let run = seed_run(
+        &fixture.pool,
+        "queued",
+        "n8n_workflow",
+        None,
+        0,
+        0,
+        600,
+        false,
+    )
+    .await;
+
+    driver.tick().await.expect("tick");
+
+    assert_eq!(status_of(&fixture.pool, &run).await, "interrupted");
+    let error: Option<Value> =
+        sqlx::query_scalar("SELECT error FROM public.mcp_runs WHERE run_id = $1::uuid")
+            .bind(&run)
+            .fetch_one(&fixture.pool)
+            .await
+            .expect("error column");
+    assert_eq!(
+        error.and_then(|error| error["code"].as_str().map(str::to_owned)),
+        Some("external_start_unknown".to_owned())
+    );
+
+    // An interrupted run is terminal: a second tick neither re-sends it nor polls it.
+    let calls = fake.calls();
+    assert_eq!(calls, vec!["start".to_owned()]);
+    driver.tick().await.expect("tick");
+    assert_eq!(status_of(&fixture.pool, &run).await, "interrupted");
+    assert_eq!(fake.calls(), calls);
     fixture.finish().await;
 }
