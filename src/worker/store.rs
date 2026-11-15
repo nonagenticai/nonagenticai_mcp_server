@@ -364,6 +364,17 @@ impl WorkerStore {
             .execute(&mut *tx)
             .await?;
             self.event(&mut tx, row, &status).await?;
+            // The one per-run success line, at the transition itself, so every finish path logs
+            // it exactly once (controller, recovery's interrupts, the external driver's
+            // dispatch-unknown) with the status the store actually wrote. Ids, runtime and the
+            // class only: the inputs, the result and every credential stay in the database.
+            tracing::info!(
+                run_id = %row.run.run_id,
+                tenant_id = %row.run.tenant_id,
+                runtime = ?row.run.runtime,
+                status = %status,
+                "run finished"
+            );
             written = Some(status);
         }
         if absent {

@@ -8,9 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- **One success log line per finished run**: the worker's controller and the external driver now
-  log the run id (and the tenant or runtime) with the terminal status, so a finished run is
-  visible in the pod log; inputs, results and credentials stay in the database.
+- **One success log line per finished run**: `WorkerStore::finish` logs the run id, tenant,
+  runtime and the status it actually wrote, so every finish path (the worker controller,
+  recovery's interrupts, the external driver) has exactly one line; inputs, results and
+  credentials stay in the database.
 
 - **The platform authoring surface.** `/mcp/sources` (7 operations: create, list, get, update,
   rotate the write-only token, disable, enable), `/mcp/services` and `/mcp/operations`

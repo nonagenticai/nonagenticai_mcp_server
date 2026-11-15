@@ -185,13 +185,10 @@ impl ExternalDriver {
 
     /// A recovered run whose dispatch may already have reached the upstream.
     async fn interrupt_unknown(&self, row: &WorkerRow) {
-        if let Err(error) = self
-            .store
-            .finish(row, "interrupted", None, Some("external_start_unknown"))
-            .await
-        {
-            log_store("interrupt", row, &error);
-        }
+        // Through the one wrapper: the store logs the outcome it writes, exactly as for every
+        // other finish path.
+        self.finish(row, "interrupted", None, Some("external_start_unknown"))
+            .await;
     }
 
     /// Start every run concurrently, one task each, under the process's adapter budget.
@@ -492,7 +489,8 @@ impl ExternalDriver {
     }
 
     /// The reference's finish, with a storage failure logged rather than propagated: a lost lease
-    /// is a no-op and a transient failure is retried by the next tick's recovery.
+    /// is a no-op and a transient failure is retried by the next tick's recovery. The store logs
+    /// the outcome it writes (one line per finished run); this wrapper reports only the refusal.
     async fn finish(
         &self,
         row: &WorkerRow,
@@ -500,17 +498,8 @@ impl ExternalDriver {
         result: Option<&serde_json::Value>,
         code: Option<&str>,
     ) {
-        match self.store.finish(row, status, result, code).await {
-            // The one per-run success line, with the status the store actually wrote. The result
-            // and the error stay in the database.
-            Ok(Some(written)) => tracing::info!(
-                run = %row.run.run_id,
-                runtime = ?row.run.runtime,
-                status = %written,
-                "external run finished"
-            ),
-            Ok(None) => {}
-            Err(error) => log_store("finish", row, &error),
+        if let Err(error) = self.store.finish(row, status, result, code).await {
+            log_store("finish", row, &error);
         }
     }
 }

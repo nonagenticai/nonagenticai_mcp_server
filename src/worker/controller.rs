@@ -117,17 +117,9 @@ impl Controller {
             .finish(&row, status, result.as_ref(), code, absent)
             .await
         {
-            // The one per-run success line, with the status the store actually wrote (a cancel
-            // during the run writes `cancelled`/`interrupted`, not the computed outcome). Never
-            // the tool's inputs or result: the manifest and the payload stay in the database.
-            Ok(Some(written)) => tracing::info!(
-                run_id = %row.run.run_id,
-                tenant_id = %row.run.tenant_id,
-                status = %written,
-                "run finished"
-            ),
-            Ok(None) => {}
-            Err(WorkerStoreError::Denied) => {}
+            // The store logs the one per-run success line when it writes the outcome; a denial
+            // (an expired or replaced owner) is reconciliation's decision now.
+            Ok(_) | Err(WorkerStoreError::Denied) => {}
             Err(error) => tracing::error!(
                 run_id = %row.run.run_id,
                 error = %error,
