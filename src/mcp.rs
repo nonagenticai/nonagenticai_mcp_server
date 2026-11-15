@@ -881,13 +881,19 @@ pub fn service_with_builtin(
     config.legacy_session_mode = false;
     // `false` = SSE frames, matching fastmcp's `json_response=False`.
     config.json_response = false;
-    // rmcp's default `allowed_hosts` is loopback-only; the deployment sets the in-cluster
-    // hostnames here. An empty value keeps the default (refuse non-loopback Host headers).
+    // The reference does not restrict Host at all: it builds its app with FastMCP's `http_app`,
+    // whose host/origin guard is off by default (`http_host_origin_protection = False`,
+    // `fastmcp/settings.py:282`; its SDK middleware is likewise constructed disabled when no
+    // settings are passed, `mcp/server/transport_security.py`). rmcp's default is the opposite —
+    // a loopback-only allow-list — and it refused every real caller at the transport (an
+    // in-cluster `Host: mcp.mcp:8033` is a 403 before any JSON-RPC handling).
+    // `MCP_ALLOWED_HOSTS` stays as an operator's OPT-IN restriction; unset means the
+    // reference's behaviour, not rmcp's.
     let config = match std::env::var("MCP_ALLOWED_HOSTS") {
         Ok(hosts) if !hosts.trim().is_empty() => {
             config.with_allowed_hosts(hosts.split(',').map(str::trim).filter(|h| !h.is_empty()))
         }
-        _ => config,
+        _ => config.disable_allowed_hosts(),
     };
     StreamableHttpService::new(
         move || Ok(server.clone()),
