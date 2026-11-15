@@ -881,13 +881,14 @@ pub fn service_with_builtin(
     config.legacy_session_mode = false;
     // `false` = SSE frames, matching fastmcp's `json_response=False`.
     config.json_response = false;
-    // The reference disables the SDK's DNS-rebinding guard altogether: the Python transport's
-    // `TransportSecurityMiddleware` is constructed with `enable_dns_rebinding_protection=False`
-    // when no settings are passed (`mcp/server/transport_security.py`), so ANY Host reaches
-    // `/mcp`. rmcp's default is the opposite — a loopback-only allow-list — and it refused every
-    // real caller at the transport (an in-cluster `Host: mcp.mcp:8033` is a 403 before any
-    // JSON-RPC handling). `MCP_ALLOWED_HOSTS` stays as an operator's OPT-IN restriction; unset
-    // means the reference's behaviour, not rmcp's.
+    // The reference does not restrict Host at all: it builds its app with FastMCP's `http_app`,
+    // whose host/origin guard is off by default (`http_host_origin_protection = False`,
+    // `fastmcp/settings.py:282`; its SDK middleware is likewise constructed disabled when no
+    // settings are passed, `mcp/server/transport_security.py`). rmcp's default is the opposite —
+    // a loopback-only allow-list — and it refused every real caller at the transport (an
+    // in-cluster `Host: mcp.mcp:8033` is a 403 before any JSON-RPC handling).
+    // `MCP_ALLOWED_HOSTS` stays as an operator's OPT-IN restriction; unset means the
+    // reference's behaviour, not rmcp's.
     let config = match std::env::var("MCP_ALLOWED_HOSTS") {
         Ok(hosts) if !hosts.trim().is_empty() => {
             config.with_allowed_hosts(hosts.split(',').map(str::trim).filter(|h| !h.is_empty()))

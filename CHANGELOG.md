@@ -10,9 +10,10 @@ All notable changes to this project are documented here. The format follows
 
 - **`/mcp` accepts the Host its callers use.** The transport kept rmcp's loopback-only Host
   allow-list, so every real caller — an in-cluster `Host: mcp.mcp:8033` — was refused `403`
-  before any JSON-RPC handling. The reference's Python transport disables that DNS-rebinding
-  guard by default (`mcp/server/transport_security.py`); with `MCP_ALLOWED_HOSTS` unset this now
-  reproduces it, and setting the variable remains an operator's opt-in restriction.
+  before any JSON-RPC handling. The reference does not restrict Host at all (FastMCP's
+  `http_host_origin_protection` defaults to `False`; its SDK middleware is disabled when
+  unconfigured); with `MCP_ALLOWED_HOSTS` unset this now reproduces that, and setting the
+  variable remains an operator's opt-in restriction.
 
 ### Added
 
