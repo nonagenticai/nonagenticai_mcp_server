@@ -4,17 +4,20 @@
 //! router or MCP handler runs — including paths no router knows, so a future route cannot be
 //! accidentally anonymous.
 //!
-//! Two credential kinds exist on this surface:
+//! Three credential kinds exist on this surface:
 //!
 //! * **management** — `X-Tenant-Id: Bearer <licence>` plus `X-MCP-Admin-Key`; the licence's
 //!   tenant must be in the operator allow-list and the key must equal a mounted key file.
 //! * **binding** — `X-Tenant-Id: Bearer <tenant-level licence>` (or `Authorization: Bearer` as
 //!   the documented off-cluster fallback) plus `X-MCP-Binding`.
+//! * **builtin** — `X-Tenant-Id: Bearer <tenant-level care-bus licence>` and NO
+//!   `X-MCP-Binding`: the first-party tool surface, valid on `/mcp` alone
+//!   ([`builtin_authority`]).
 //!
-//! Deliberately not ported (phase 5, and their observable failure is preserved as 401):
-//! Keycloak JWT callers, the builtin care-bus caller, the tool-builder and `/mcp/internal`
-//! credential paths. The trusted-header extractor in `crate::tenant` never authorises anything
-//! here: a bare `X-Tenant-Id` without the `Bearer` licence prefix is just a malformed licence.
+//! Deliberately not ported (their observable failure is preserved as 401): Keycloak JWT callers
+//! and the tool-builder, which is disabled in this deployment. The trusted-header extractor in
+//! `crate::tenant` never authorises anything here: a bare `X-Tenant-Id` without the `Bearer`
+//! licence prefix is just a malformed licence.
 
 use std::sync::LazyLock;
 
@@ -183,10 +186,15 @@ async fn authorize(auth: &Auth, headers: &HeaderMap, path: &str) -> Result<Princ
 /// (`protocol.py:93-140`), fail closed.
 ///
 /// `X-Tenant-Id: Bearer <licence>` — `Authorization` is never a licence candidate here — and
-/// only the care-bus application key authenticates this way, because only it has a builtin
+/// only a TENANT-LEVEL care-bus licence authenticates this way, because only it has a builtin
 /// scope. The credential is valid on the protocol endpoint alone: every other path is 403, not
 /// "unknown route". An `mcp` licence with no binding is 401 "binding required", which is also
 /// the reference's answer while the tool builder is disabled.
+///
+/// The reference authenticates a *member* care-bus licence and then gives it no scope
+/// (`scope.py:95`, an empty listing). The port has no principal representation for "care-bus
+/// but unscoped", so it refuses that licence 401 instead: strictly narrower, never wider, and
+/// unreachable today — licences issues an `svc:` subject only as a tenant-level licence.
 async fn builtin_authority(
     auth: &Auth,
     headers: &HeaderMap,
@@ -198,7 +206,7 @@ async fn builtin_authority(
         .filter(|token| !token.is_empty())
         .ok_or(AuthError::Unauthorized)?;
     let licence = auth.licences.introspect_any(token).await?;
-    if licence.app != CAREBUS_LICENCE_APP {
+    if licence.app != CAREBUS_LICENCE_APP || !licence.identity.tenant_level() {
         return Err(AuthError::Unauthorized);
     }
     // `PROTOCOL_PATHS = {"/mcp", "/mcp/"}`.

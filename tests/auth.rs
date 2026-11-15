@@ -795,3 +795,24 @@ async fn a_builtin_caller_needs_x_tenant_id_not_authorization() {
     .await;
     assert_unauthorized(status, &headers, &body);
 }
+
+#[tokio::test]
+async fn a_member_care_bus_licence_is_refused() {
+    // The adversarial shape: an `svc:` subject that is NOT a tenant-level licence. The
+    // reference authenticates it and then gives it no scope (`scope.py:95` → empty listing); the
+    // port has no "care-bus but unscoped" principal, so it refuses 401 — strictly narrower, and
+    // unreachable today because licences issues `svc:` only as a tenant-level licence.
+    let mut licence = active_licence("care-bus", TENANT, "member");
+    licence["subject_id"] = json!(format!("svc:{TENANT}:care-bus"));
+    let authority = authority(licence).await;
+    let app = probe(auth(&config(Some(&authority.url), None, None)));
+    let (status, headers, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_unauthorized(status, &headers, &body);
+}
