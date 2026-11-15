@@ -12,6 +12,7 @@ use base64::engine::general_purpose::URL_SAFE;
 use regex::Regex;
 
 use crate::auth::uuid::Rfc4122Uuid;
+use crate::worker::broker::egress::IpNetwork;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
@@ -47,6 +48,8 @@ pub struct Config {
     pub platform_database_url: Option<String>,
     /// `MCP_SOURCE_*`: the tool-source authoring settings (sealing key and host allow-list).
     pub sources: SourceSettings,
+    /// `MCP_BUILDER_*`: the tenant tool builder's switch, quotas and spec-fetch bounds.
+    pub builder: BuilderSettings,
     /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
     /// digests a `kata_python` tool may name, e.g. `["registry.example/runner@sha256:…"]`.
     /// A tool with any other digest is refused.
@@ -93,6 +96,11 @@ impl Config {
             });
         }
         let catalog_page_size = u32_setting(&get, "CATALOG_PAGE_SIZE", 10, 1, 100)?;
+        let builder = BuilderSettings::from_lookup(|key| get(key))?;
+        // The reference's startup cross-check (`config.py:370-372`): a builder that is on has no
+        // way to author a draft run without the licence application key.
+        let license_app_key = get("MCP_LICENSE_APP_KEY");
+        builder.validate(license_app_key.as_deref())?;
         Ok(Self {
             database_url,
             database_migrate_url: get("DATABASE_MIGRATE_URL"),
@@ -102,6 +110,7 @@ impl Config {
             catalog_page_size,
             platform_database_url: get("MCP_PLATFORM_DATABASE_URL"),
             sources: SourceSettings::from_lookup(|key| get(key))?,
+            builder,
             approved_runner_images: json_string_list(
                 get("MCP_APPROVED_RUNNER_IMAGES"),
                 "MCP_APPROVED_RUNNER_IMAGES",
@@ -189,6 +198,195 @@ fn split_source_hosts(value: Option<String>) -> Result<Vec<String>, ConfigError>
         });
     }
     Ok(hosts)
+}
+
+/// The tenant tool builder's settings, from the reference `Settings` (`config.py:144-163`).
+///
+/// The builder is off until an operator enables it. Its quotas are per tenant and counted under
+/// a per-tenant advisory lock by the storage layer; the spec-fetch bounds are what the fetch and
+/// the cached-document store enforce. `MCP_BUILDER_ALLOWED_PORTS` and `MCP_BUILDER_DENY_CIDRS`
+/// are the egress policy's inputs (the reference's `builder_allowed_ports` / `builder_deny_cidrs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuilderSettings {
+    /// `MCP_BUILDER_ENABLED` (default false): whether the builder is served at all.
+    pub enabled: bool,
+    /// `MCP_BUILDER_MAX_SOURCES` (1 to 1000, default 20): active sources per tenant.
+    pub max_sources: i32,
+    /// `MCP_BUILDER_MAX_OPERATIONS` (1 to 10000, default 300): keyed operations per tenant.
+    pub max_operations: i32,
+    /// `MCP_BUILDER_MAX_TOOLS` (1 to 1000, default 50): non-retired tools per tenant.
+    pub max_tools: i32,
+    /// `MCP_BUILDER_MAX_TOOLKITS` (1 to 1000, default 10): toolkit identities per tenant.
+    pub max_toolkits: i32,
+    /// `MCP_BUILDER_SPEC_MAX_BYTES` (1 to 67108864, default 5 MiB): one fetched document.
+    pub spec_max_bytes: usize,
+    /// `MCP_BUILDER_SPEC_MAX_TOTAL_BYTES_PER_TENANT` (1 to 1073741824, default 25 MiB): all
+    /// cached documents of one tenant, summed over its sources.
+    pub spec_max_total_bytes_per_tenant: i64,
+    /// `MCP_BUILDER_SPEC_FETCHES_PER_HOUR` (1 to 10000, default 30): one tenant's fetches.
+    pub spec_fetches_per_hour: usize,
+    /// `MCP_BUILDER_TEST_RUNS_PER_HOUR` (1 to 10000, default 60): one tenant's draft runs.
+    pub test_runs_per_hour: u64,
+    /// `MCP_BUILDER_ALLOWED_PORTS` (comma-separated, 1 to 16 entries, default `443`): the ports
+    /// a tenant source origin may name.
+    pub allowed_ports: Vec<u16>,
+    /// `MCP_BUILDER_DENY_CIDRS` (comma-separated, at most 64, default empty): extra networks the
+    /// tenant egress must refuse beyond the non-global addresses it always refuses.
+    pub deny_cidrs: Vec<String>,
+}
+
+impl Default for BuilderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_sources: 20,
+            max_operations: 300,
+            max_tools: 50,
+            max_toolkits: 10,
+            spec_max_bytes: 5 * 1024 * 1024,
+            spec_max_total_bytes_per_tenant: 25 * 1024 * 1024,
+            spec_fetches_per_hour: 30,
+            test_runs_per_hour: 60,
+            allowed_ports: vec![443],
+            deny_cidrs: Vec::new(),
+        }
+    }
+}
+
+impl BuilderSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`BuilderSettings::from_env`]. Empty values count as unset.
+    ///
+    /// The licence cross-check needs the authentication settings, which this value does not
+    /// carry; [`BuilderSettings::validate`] applies it once they are known.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let settings = Self {
+            enabled: bool_setting(&get, "MCP_BUILDER_ENABLED", false)?,
+            max_sources: i32_setting(&get, "MCP_BUILDER_MAX_SOURCES", 20, 1, 1000)?,
+            max_operations: i32_setting(&get, "MCP_BUILDER_MAX_OPERATIONS", 300, 1, 10_000)?,
+            max_tools: i32_setting(&get, "MCP_BUILDER_MAX_TOOLS", 50, 1, 1000)?,
+            max_toolkits: i32_setting(&get, "MCP_BUILDER_MAX_TOOLKITS", 10, 1, 1000)?,
+            spec_max_bytes: usize_setting(
+                &get,
+                "MCP_BUILDER_SPEC_MAX_BYTES",
+                5 * 1024 * 1024,
+                1,
+                67_108_864,
+            )?,
+            spec_max_total_bytes_per_tenant: i64_setting(
+                &get,
+                "MCP_BUILDER_SPEC_MAX_TOTAL_BYTES_PER_TENANT",
+                25 * 1024 * 1024,
+                1,
+                1_073_741_824,
+            )?,
+            spec_fetches_per_hour: usize_setting(
+                &get,
+                "MCP_BUILDER_SPEC_FETCHES_PER_HOUR",
+                30,
+                1,
+                10_000,
+            )?,
+            test_runs_per_hour: u64_setting(&get, "MCP_BUILDER_TEST_RUNS_PER_HOUR", 60, 1, 10_000)?,
+            allowed_ports: builder_ports(get("MCP_BUILDER_ALLOWED_PORTS"))?,
+            deny_cidrs: builder_deny_cidrs(get("MCP_BUILDER_DENY_CIDRS"))?,
+        };
+        settings.validate(None)?;
+        Ok(settings)
+    }
+
+    /// The reference's startup rules: the port and deny lists are well formed, and an enabled
+    /// builder has `MCP_LICENSE_APP_KEY` (`config.py:370-372`) — a builder without licence
+    /// authentication could never admit a draft run.
+    ///
+    /// `None` skips only the licence cross-check, so [`BuilderSettings::from_lookup`] can
+    /// validate everything it can see; the composition root passes the parsed application key.
+    pub fn validate(&self, license_app_key: Option<&str>) -> Result<(), ConfigError> {
+        if self.allowed_ports.is_empty()
+            || self.allowed_ports.len() > 16
+            || self.allowed_ports.contains(&0)
+        {
+            return Err(ConfigError::Invalid {
+                name: "MCP_BUILDER_ALLOWED_PORTS",
+                reason: "invalid builder port allow-list".to_owned(),
+            });
+        }
+        if self.deny_cidrs.len() > 64 {
+            return Err(ConfigError::Invalid {
+                name: "MCP_BUILDER_DENY_CIDRS",
+                reason: "too many builder deny CIDRs".to_owned(),
+            });
+        }
+        for cidr in &self.deny_cidrs {
+            if IpNetwork::parse(cidr).is_err() {
+                return Err(ConfigError::Invalid {
+                    name: "MCP_BUILDER_DENY_CIDRS",
+                    reason: "invalid builder deny CIDR".to_owned(),
+                });
+            }
+        }
+        if self.enabled && license_app_key.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_LICENSE_APP_KEY",
+                reason: "the tool builder requires license authentication".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// `MCP_BUILDER_ALLOWED_PORTS` (`config.py:242-250`): comma-separated, 1 to 16 ports in
+/// `1..=65535`. An absent value is the reference's default (`443`).
+fn builder_ports(raw: Option<String>) -> Result<Vec<u16>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(vec![443]);
+    };
+    let invalid = || ConfigError::Invalid {
+        name: "MCP_BUILDER_ALLOWED_PORTS",
+        reason: "invalid builder port allow-list".to_owned(),
+    };
+    let mut ports = Vec::new();
+    for entry in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let port: u16 = entry.parse().map_err(|_| invalid())?;
+        if port == 0 {
+            return Err(invalid());
+        }
+        ports.push(port);
+    }
+    if !(1..=16).contains(&ports.len()) {
+        return Err(invalid());
+    }
+    Ok(ports)
+}
+
+/// `MCP_BUILDER_DENY_CIDRS` (`config.py:252-262`): comma-separated `ip_network(strict=False)`
+/// entries, at most 64. The network stays as written; [`crate::worker::broker::egress`] parses
+/// it again with the same host-bit masking.
+fn builder_deny_cidrs(raw: Option<String>) -> Result<Vec<String>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let cidrs: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if cidrs.len() > 64 {
+        return Err(ConfigError::Invalid {
+            name: "MCP_BUILDER_DENY_CIDRS",
+            reason: "too many builder deny CIDRs".to_owned(),
+        });
+    }
+    Ok(cidrs)
 }
 
 /// The package bounds from the reference `Settings`: how many files a submitted tool package may
@@ -1776,6 +1974,63 @@ fn u64_setting(
     }
 }
 
+fn usize_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: usize,
+    minimum: usize,
+    maximum: usize,
+) -> Result<usize, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<usize>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+fn i32_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: i32,
+    minimum: i32,
+    maximum: i32,
+) -> Result<i32, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<i32>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+fn i64_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: i64,
+    minimum: i64,
+    maximum: i64,
+) -> Result<i64, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<i64>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
 fn float_setting(
     get: &impl Fn(&str) -> Option<String>,
     name: &'static str,
@@ -1854,6 +2109,93 @@ mod tests {
             cfg(&[("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "nope")]),
             Err(ConfigError::Invalid { .. })
         ));
+    }
+
+    #[test]
+    fn builder_settings_take_reference_defaults_and_require_license_authentication() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let defaults = cfg(&base).unwrap().builder;
+        assert_eq!(defaults, BuilderSettings::default());
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.max_sources, 20);
+        assert_eq!(defaults.max_operations, 300);
+        assert_eq!(defaults.max_tools, 50);
+        assert_eq!(defaults.max_toolkits, 10);
+        assert_eq!(defaults.spec_max_bytes, 5 * 1024 * 1024);
+        assert_eq!(defaults.spec_max_total_bytes_per_tenant, 25 * 1024 * 1024);
+        assert_eq!(defaults.spec_fetches_per_hour, 30);
+        assert_eq!(defaults.test_runs_per_hour, 60);
+        assert_eq!(defaults.allowed_ports, vec![443]);
+        assert!(defaults.deny_cidrs.is_empty());
+
+        // The reference's cross-check (`config.py:370-372`).
+        let enabled = [
+            ("DATABASE_URL", "postgres://x"),
+            ("BIND_ADDR", "0.0.0.0:9"),
+            ("MCP_BUILDER_ENABLED", "true"),
+        ];
+        assert_eq!(
+            cfg(&enabled).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_LICENSE_APP_KEY",
+                reason: "the tool builder requires license authentication".into(),
+            }
+        );
+        let licensed = [
+            ("DATABASE_URL", "postgres://x"),
+            ("BIND_ADDR", "0.0.0.0:9"),
+            ("MCP_BUILDER_ENABLED", "true"),
+            ("MCP_LICENSE_APP_KEY", "mcp"),
+        ];
+        let settings = cfg(&licensed).unwrap().builder;
+        assert!(settings.enabled);
+        // The cross-check is re-runnable by a composition root that parsed auth separately.
+        settings.validate(Some("mcp")).expect("licensed builder");
+        assert!(settings.validate(None).is_err());
+    }
+
+    #[test]
+    fn builder_ports_and_deny_cidrs_are_bounded() {
+        let base = vec![("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let with = |name: &'static str, value: &'static str| {
+            let mut pairs = base.clone();
+            pairs.push((name, value));
+            cfg(&pairs)
+        };
+
+        assert_eq!(
+            with("MCP_BUILDER_ALLOWED_PORTS", "443, 8443")
+                .unwrap()
+                .builder
+                .allowed_ports,
+            vec![443, 8443]
+        );
+        for value in ["0", "65536", "443,8443,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"] {
+            assert!(
+                with("MCP_BUILDER_ALLOWED_PORTS", value).is_err(),
+                "MCP_BUILDER_ALLOWED_PORTS={value:?} must be refused"
+            );
+        }
+
+        assert_eq!(
+            with("MCP_BUILDER_DENY_CIDRS", "10.0.0.0/8,192.168.1.7/16")
+                .unwrap()
+                .builder
+                .deny_cidrs,
+            vec!["10.0.0.0/8".to_owned(), "192.168.1.7/16".to_owned()]
+        );
+        assert!(with("MCP_BUILDER_DENY_CIDRS", "not-a-network").is_err());
+        let too_many: Vec<String> = (0..65).map(|index| format!("10.{index}.0.0/16")).collect();
+        let too_many = too_many.join(",");
+        let mut pairs = base;
+        pairs.push(("MCP_BUILDER_DENY_CIDRS", too_many.as_str()));
+        assert_eq!(
+            cfg(&pairs).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_BUILDER_DENY_CIDRS",
+                reason: "too many builder deny CIDRs".into(),
+            }
+        );
     }
 
     #[test]

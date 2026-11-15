@@ -1,8 +1,8 @@
 //! The tenant builder's pure domain: OpenAPI documents in, draft tool packages and manifests out.
 //!
 //! Ported from the reference's `src/builder/{models,spec,packaging,openapi}.py`. No database and
-//! no HTTP: the fetch itself (the reference's `DocumentFetcher` protocol and broker call) is a
-//! later lane and is deliberately not ported here.
+//! no HTTP: the document fetch itself is the reference's `DocumentFetcher` protocol, ported in
+//! [`service`] with the broker's pinned-egress transport behind it.
 //!
 //! # Where the port cannot be literal
 //!
@@ -41,6 +41,11 @@
 pub mod models;
 pub mod openapi;
 pub mod packaging;
+pub mod service;
 pub mod spec;
 
 pub use models::{BuilderInputError, HOST_FILES};
+pub use service::{
+    BuilderError, BuilderService, BuilderServiceDependencies, DocumentFetcher, FetchError,
+    PinnedEgressFetcher,
+};
