@@ -349,7 +349,7 @@ pub async fn document(clients: &Clients, arguments: &Map<String, Value>) -> Resu
                 )
                 .await?;
                 budget = budget.saturating_sub(data.len());
-                texts.push(pdf_text(&data)?);
+                texts.push(pdf_text(data).await?);
             }
             let doc = document_value(&meta, &unid, &texts, &pdf_paths, &client);
             remember(&key, doc.clone());

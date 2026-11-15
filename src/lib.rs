@@ -14,6 +14,7 @@ pub mod execution;
 pub mod external;
 pub mod grant;
 pub mod mcp;
+pub mod pdf;
 pub mod platform;
 pub mod routes;
 pub mod sources;
