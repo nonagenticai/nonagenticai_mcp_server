@@ -3,6 +3,7 @@
 
 pub mod available;
 pub mod bindings;
+pub mod fr_channel;
 pub mod health;
 pub mod operations;
 pub mod runs;
