@@ -398,6 +398,72 @@ async fn adopt_stamps_only_what_is_absent_and_a_rerun_is_a_no_op() {
     fixture.finish(&[]).await;
 }
 
+/// The property that keeps the NEXT migration from being swallowed: this binary runs as a
+/// per-pod-start initContainer, so a migration newer than the baseline must be left unstamped and
+/// executed by the migrator, never marked applied by a stamp whose SQL never ran.
+#[tokio::test]
+async fn adopt_never_stamps_a_migration_newer_than_the_baseline() {
+    let fixture = Database::new(true).await;
+    let url = fixture.url.as_str();
+    let versions: Vec<i64> = db::MIGRATOR
+        .iter()
+        .map(|migration| migration.version)
+        .collect();
+    assert_eq!(
+        versions,
+        vec![1, 2],
+        "this test is written for the 0001/0002 baseline"
+    );
+    // The live database is alembic's: the whole schema, no sqlx history at all.
+    sqlx::query("DELETE FROM _sqlx_migrations")
+        .execute(&fixture.pool)
+        .await
+        .expect("clear the sqlx history");
+
+    // A cutoff that leaves 0002 to the migrator: reported, and not stamped.
+    let report = mcp_server_rs::grant::adopt_schema_until(url, 1)
+        .await
+        .expect("adopt the baseline");
+    assert_eq!(
+        report
+            .stamped
+            .iter()
+            .map(|stamped| stamped.version)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(report.pending, vec![2]);
+    assert_eq!(
+        stamps(&fixture.pool)
+            .await
+            .iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>(),
+        vec![1],
+        "0002 is newer than the cutoff and must not be stamped"
+    );
+
+    // The migrator then EXECUTES it — 0002's `INSERT ... ON CONFLICT DO NOTHING` against the
+    // singleton row the baseline already carries.
+    db::migrate(&fixture.pool)
+        .await
+        .expect("the migrator applies what adopt left pending");
+    assert_eq!(
+        stamps(&fixture.pool)
+            .await
+            .iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>(),
+        versions
+    );
+    let state: i64 = sqlx::query_scalar("SELECT count(*) FROM mcp_catalog_state")
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("catalog state");
+    assert_eq!(state, 1, "0002 ran once and left exactly its singleton row");
+    fixture.finish(&[]).await;
+}
+
 #[tokio::test]
 async fn adopt_refuses_a_checksum_that_does_not_match_and_a_failed_row() {
     let fixture = Database::new(true).await;
@@ -778,4 +844,19 @@ async fn an_unusable_role_name_is_refused_before_any_sql_runs() {
         stderr(&refused)
     );
     fixture.finish(&[]).await;
+}
+
+/// The three operator actions are mutually exclusive (one clap `action` group): the initContainer
+/// runs them as three separate invocations, so a combined call must be refused by the parser
+/// rather than silently running only the first action it sees.
+#[test]
+fn the_operator_actions_are_mutually_exclusive() {
+    let out = run(
+        &["--adopt-schema", "--seed-platform", "/app/toolkits"],
+        &[],
+        "postgres://unused",
+    );
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("cannot be used with"), "{err}");
 }

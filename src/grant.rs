@@ -423,26 +423,45 @@ pub struct StampedMigration {
     pub description: String,
 }
 
+/// The last migration that belongs to the pre-sqlx baseline.
+///
+/// `0001_baseline` is a `pg_dump` of the schema the alembic head created, and `0002_catalog_state`
+/// inserts the singleton row the reference's own baseline migration inserted — both are already
+/// present in a live database, which is what an adoption stamps. Anything newer must be EXECUTED
+/// by the migrator: this binary runs as a per-pod-start initContainer, so stamping a migration
+/// that has not run would mark its SQL applied forever and every later deploy would inherit the
+/// missing schema.
+pub const BASELINE_CUTOFF: i64 = 2;
+
 /// What `--adopt-schema` did, in the order the migrations are embedded.
 #[derive(Debug, Default)]
 pub struct AdoptReport {
     pub stamped: Vec<StampedMigration>,
     pub already: Vec<i64>,
+    /// Embedded migrations newer than the cutoff: left for the migrator to execute.
+    pub pending: Vec<i64>,
 }
 
 impl fmt::Display for AdoptReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             formatter,
-            "adopt-schema: {} stamped, {} already applied",
+            "adopt-schema: {} stamped, {} already applied, {} pending",
             self.stamped.len(),
-            self.already.len()
+            self.already.len(),
+            self.pending.len()
         )?;
         for stamped in &self.stamped {
             writeln!(
                 formatter,
                 "  stamped {} ({})",
                 stamped.version, stamped.description
+            )?;
+        }
+        for pending in &self.pending {
+            writeln!(
+                formatter,
+                "  pending {pending}: newer than the baseline, the migrator executes it at startup"
             )?;
         }
         Ok(())
@@ -473,7 +492,7 @@ impl fmt::Display for GrantReport {
     }
 }
 
-/// Stamp every embedded migration as applied, without executing it.
+/// Stamp the baseline migrations as applied, without executing them.
 ///
 /// The values are the ones sqlx itself verifies: `MIGRATOR.iter()` carries the version,
 /// description and SHA-384 checksum `sqlx::migrate!` computed from each file's exact bytes. A
@@ -481,7 +500,17 @@ impl fmt::Display for GrantReport {
 /// when it does not; a failed row or a version this binary does not embed is refused for the same
 /// reason `MIGRATOR.run()` would refuse it at startup. Nothing is written unless the whole run
 /// passes, because every read and write is one transaction.
+///
+/// Only [`BASELINE_CUTOFF`] and older are stamped. A newer embedded migration is reported as
+/// pending and left unstamped, so the migrator executes it at startup — the property that keeps
+/// the next migration from being swallowed by a pod that adopts on every start.
 pub async fn adopt_schema(url: &str) -> Result<AdoptReport, OperatorError> {
+    adopt_schema_until(url, BASELINE_CUTOFF).await
+}
+
+/// [`adopt_schema`] with the cutoff as an argument, so a test can exercise "newer than the
+/// baseline" without a second migration file existing yet.
+pub async fn adopt_schema_until(url: &str, cutoff: i64) -> Result<AdoptReport, OperatorError> {
     let mut conn = PgConnection::connect(url).await?;
     let mut tx = conn.begin().await?;
 
@@ -528,6 +557,11 @@ pub async fn adopt_schema(url: &str) -> Result<AdoptReport, OperatorError> {
                 return Err(OperatorError::ChecksumMismatch {
                     version: migration.version,
                 });
+            }
+            // Newer than the baseline and not applied: the migrator's to execute, never this
+            // step's to stamp.
+            None if migration.version > cutoff => {
+                report.pending.push(migration.version);
             }
             None => {
                 sqlx::query(STAMP_MIGRATION)
