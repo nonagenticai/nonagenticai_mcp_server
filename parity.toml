@@ -44,9 +44,9 @@ upstreams = []
 # Every source operation that is NOT yet ported, grouped by the phase that ports it. This is
 # the "explicit reviewed exclusion list" the rewrite plan allows: the diff is `equal` only
 # with these applied AND with no other difference. A phase deletes its own group as it lands,
-# so the list only ever shrinks. Reviewed 2026-11-13 against
-# nonagenticai/nonagenticai_mcp_server-archive@dd2cabf (108 source operations; the four health
-# operations are ported and therefore NOT listed).
+# so the list only ever shrinks. Reviewed 2026-11-13 against the private pre-scrub source
+# @dd2cabf (108 source operations; the four health operations are ported and therefore NOT
+# listed).
 #
 #   phase 2  catalog read + MCP projection: available-tools, tools, toolkits, bindings
 #   phase 3  execution control: runs
