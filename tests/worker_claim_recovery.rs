@@ -84,6 +84,7 @@ impl Harness {
             binding_revision: Some(revision),
             management: false,
             platform: false,
+            licence: None,
         };
         let resolved = ResolvedTool {
             manifest,

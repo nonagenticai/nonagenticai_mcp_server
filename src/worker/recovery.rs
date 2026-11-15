@@ -86,7 +86,7 @@ impl Recovery {
                     )
                     .await
                 {
-                    Ok(()) | Err(WorkerStoreError::Denied) => {}
+                    Ok(_) | Err(WorkerStoreError::Denied) => {}
                     Err(error) => return Err(error),
                 }
             }
@@ -200,7 +200,9 @@ impl Recovery {
         .await?;
         tx.commit().await?;
 
-        self.store
+        // The store logs the outcome it writes; recovery has nothing to add to the line.
+        let _ = self
+            .store
             .finish(claimed, "interrupted", None, Some("worker_lost"), absent)
             .await?;
         Ok(())

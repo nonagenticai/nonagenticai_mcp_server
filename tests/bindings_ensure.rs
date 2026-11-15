@@ -596,6 +596,7 @@ fn platform_principal() -> Principal {
         binding_revision: None,
         management: true,
         platform: true,
+        licence: None,
     }
 }
 

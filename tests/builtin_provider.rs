@@ -14,16 +14,17 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Request, State};
+use axum::extract::{Json, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
+use axum::routing::post;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{Value, json};
 use sqlx::Row;
 
 use mcp_server_rs::AppState;
-use mcp_server_rs::auth::{Principal, Rfc4122Uuid};
+use mcp_server_rs::auth::{Auth, AuthConfig, Principal, Rfc4122Uuid, SubjectKind, protect};
 use mcp_server_rs::builtin::audit::{AuditError, AuditFuture, AuditSink};
 use mcp_server_rs::builtin::{
     BuiltinCaller, BuiltinProvider, BuiltinTool, DENIED_MESSAGE, DatabaseAuditSink, Handler, boxed,
@@ -60,12 +61,65 @@ fn principal(subject: &str) -> Principal {
         binding_revision: None,
         management: false,
         platform: false,
+        licence: None,
+    }
+}
+
+/// A licence principal carrying the authority's reported facts — what the non-binding auth
+/// path produces. The scope must come from these, never from the subject.
+fn licence_principal(app: &str, kind: SubjectKind, subject: &str) -> Principal {
+    Principal {
+        licence: Some(mcp_server_rs::auth::LicenceFacts {
+            app: app.to_owned(),
+            subject_kind: Some(kind),
+        }),
+        ..principal(subject)
     }
 }
 
 /// A tenant-level care-bus licence subject: the licence-only caller the reference serves.
 fn carebus_licence() -> Principal {
     principal(&format!("svc:{}:care-bus", support::TENANT_A))
+}
+
+/// A stub licence authority reporting the member care-bus licence `mcp_post` presents as
+/// `X-Tenant-Id: Bearer <token>` — the shape the reference authenticates and leaves unscoped.
+async fn member_carebus_authority() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind authority");
+    let address = listener.local_addr().expect("authority address");
+    let router = Router::new().route(
+        "/license/introspect",
+        post(|| async {
+            Json(json!({
+                "active": true,
+                "app": {"key": "care-bus"},
+                "tenant_id": support::TENANT_A,
+                "license_id": support::LICENCE_ID,
+                "subject_id": format!("svc:{}:care-bus", support::TENANT_A),
+                "subject_kind": "member",
+                "expires_at": "2099-01-01T00:00:00.000000+00:00",
+                "token_expires_at": null,
+            }))
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("authority server");
+    });
+    format!("http://{address}/license/introspect")
+}
+
+fn member_auth(authority: &str) -> Auth {
+    Auth::from_config(&AuthConfig {
+        license_introspect_url: Some(authority.to_owned()),
+        license_app_key: Some("mcp".to_owned()),
+        license_allow_http: true,
+        ..AuthConfig::default()
+    })
+    .expect("valid auth config")
 }
 
 // ── requests ──────────────────────────────────────────────────────────────────────────────
@@ -315,6 +369,81 @@ async fn a_call_outside_the_scope_is_denied() {
         json!(DENIED_MESSAGE),
         "{reply}"
     );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_member_care_bus_licence_sees_no_tool_and_is_denied() {
+    // The reference authenticates a member's per-login care-bus licence and gives it NO scope
+    // (`scope.py:95`): an empty listing, and every call is the denial. The subject keeps the
+    // same `svc:` shape the tenant's own licence carries on purpose — only the authority's
+    // reported `subject_kind` may decide the scope.
+    let fixture = Fixture::new().await;
+    let member = licence_principal(
+        "care-bus",
+        SubjectKind::Member,
+        &format!("svc:{}:care-bus", support::TENANT_A),
+    );
+    let app = builtin_app(fixture.state(), member, Some(one_crm_tool()));
+
+    let (status, _, listing) = mcp_post(&app, None, tools_list(None)).await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    assert_eq!(
+        listing["result"]["tools"].as_array().map(Vec::len),
+        Some(0),
+        "{listing}"
+    );
+
+    let (_, _, reply) = mcp_post(&app, None, tools_call("crm_demo", json!({}))).await;
+    assert_eq!(reply["result"]["isError"], json!(true), "{reply}");
+    assert_eq!(
+        reply["result"]["content"][0]["text"],
+        json!(DENIED_MESSAGE),
+        "{reply}"
+    );
+    fixture.finish().await;
+}
+
+/// The same rule across the REAL authenticator and the real MCP service, in one hop: the licence
+/// authority reports a member care-bus licence, the middleware admits it, and the dispatch gives
+/// it an empty listing and the denial — audited as a care-bus licence.
+#[tokio::test]
+async fn the_real_authenticator_admits_a_member_licence_with_an_empty_listing() {
+    let fixture = Fixture::new().await;
+    let authority = member_carebus_authority().await;
+    let provider = one_crm_tool().with_sink(Arc::new(DatabaseAuditSink::new(fixture.pool.clone())));
+    let state = fixture.state();
+    let app = Router::new()
+        .route_service("/mcp", mcp::service_with_builtin(&state, Some(provider)))
+        .layer(from_fn_with_state(member_auth(&authority), protect));
+
+    let (status, _, listing) = mcp_post(&app, None, tools_list(None)).await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    assert_eq!(
+        listing["result"]["tools"].as_array().map(Vec::len),
+        Some(0),
+        "{listing}"
+    );
+
+    let (_, _, reply) = mcp_post(&app, None, tools_call("crm_demo", json!({}))).await;
+    assert_eq!(reply["result"]["isError"], json!(true), "{reply}");
+    assert_eq!(
+        reply["result"]["content"][0]["text"],
+        json!(DENIED_MESSAGE),
+        "{reply}"
+    );
+
+    let row =
+        sqlx::query("SELECT status, principal_kind, principal FROM public.mcp_tool_call_audit")
+            .fetch_one(&fixture.pool)
+            .await
+            .expect("audit row");
+    let status: String = row.try_get("status").expect("status");
+    let principal_kind: String = row.try_get("principal_kind").expect("principal_kind");
+    let principal: String = row.try_get("principal").expect("principal");
+    assert_eq!(status, "denied");
+    assert_eq!(principal_kind, "carebus_licence");
+    assert_eq!(principal, format!("svc:{}:care-bus", support::TENANT_A));
     fixture.finish().await;
 }
 

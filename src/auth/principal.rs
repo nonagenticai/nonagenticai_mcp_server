@@ -31,6 +31,17 @@ impl LicenseIdentity {
     }
 }
 
+/// The introspected licence's application key and holder kind (see
+/// [`crate::builtin::scope::licence_scope`]).
+///
+/// `subject_kind: None` means the authority reported none — the reference gives such a caller
+/// no scope (`scope.py:95`), so the value must travel rather than be inferred from the subject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LicenceFacts {
+    pub app: String,
+    pub subject_kind: Option<SubjectKind>,
+}
+
 /// The authenticated principal stored in request extensions by the `/mcp` middleware.
 ///
 /// `management` is set by the operator-key path; `platform` raises a management principal with
@@ -44,4 +55,7 @@ pub struct Principal {
     pub binding_revision: Option<i64>,
     pub management: bool,
     pub platform: bool,
+    /// The licence authority's facts, set only by the non-binding (builtin) path; every other
+    /// principal leaves it `None`, so the builtin caller falls back to its subject shape.
+    pub licence: Option<LicenceFacts>,
 }

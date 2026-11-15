@@ -261,6 +261,7 @@ impl CatalogResolver {
             binding_revision: Some(i64::from(binding.revision.get())),
             management: false,
             platform: false,
+            licence: None,
         })
         .await
     }

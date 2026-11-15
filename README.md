@@ -189,8 +189,9 @@ with Docker, else they fail — never skip. Each test gets its own fresh databas
 `parity.toml` pins the Python reference at a public archived commit and defines the contract
 used by the schema and OpenAPI diff gates. The OpenAPI diff is `equal` only when the reviewed
 exclusions in `parity.toml` apply **and** nothing else differs, so the contract can only get
-stricter. The remaining exclusions are the phase-5 builder, internal-mirror, sources, services,
-operations, credential-profile and toolkit-import surfaces, and the phase-6 `fr` channel;
+stricter. The exclusion list is **empty**: every operation the pinned source serves is served by
+this service (`equal true · matched 108 · missing 0 · extra 0 · changed 0 · ignored 0`), so the
+contract now guards against regression rather than tracking what is left to port;
 `parity/README.md` records the evidence and the commands that produced it.
 
 ## CI

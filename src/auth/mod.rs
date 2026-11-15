@@ -36,7 +36,7 @@ pub use licenses::{
 };
 pub use management::ManagementAuthorizer;
 pub use pg_bindings::PgBindingAuthority;
-pub use principal::{LicenseIdentity, Principal, SubjectKind};
+pub use principal::{LicenceFacts, LicenseIdentity, Principal, SubjectKind};
 pub use protocol::{AuthPrincipal, is_management, protect};
 pub use uuid::Rfc4122Uuid;
 

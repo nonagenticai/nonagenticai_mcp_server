@@ -117,7 +117,9 @@ impl Controller {
             .finish(&row, status, result.as_ref(), code, absent)
             .await
         {
-            Ok(()) | Err(WorkerStoreError::Denied) => {}
+            // The store logs the one per-run success line when it writes the outcome; a denial
+            // (an expired or replaced owner) is reconciliation's decision now.
+            Ok(_) | Err(WorkerStoreError::Denied) => {}
             Err(error) => tracing::error!(
                 run_id = %row.run.run_id,
                 error = %error,

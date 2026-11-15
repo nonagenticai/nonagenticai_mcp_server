@@ -185,13 +185,10 @@ impl ExternalDriver {
 
     /// A recovered run whose dispatch may already have reached the upstream.
     async fn interrupt_unknown(&self, row: &WorkerRow) {
-        if let Err(error) = self
-            .store
-            .finish(row, "interrupted", None, Some("external_start_unknown"))
-            .await
-        {
-            log_store("interrupt", row, &error);
-        }
+        // Through the one wrapper: the store logs the outcome it writes, exactly as for every
+        // other finish path.
+        self.finish(row, "interrupted", None, Some("external_start_unknown"))
+            .await;
     }
 
     /// Start every run concurrently, one task each, under the process's adapter budget.
@@ -492,7 +489,8 @@ impl ExternalDriver {
     }
 
     /// The reference's finish, with a storage failure logged rather than propagated: a lost lease
-    /// is a no-op and a transient failure is retried by the next tick's recovery.
+    /// is a no-op and a transient failure is retried by the next tick's recovery. The store logs
+    /// the outcome it writes (one line per finished run); this wrapper reports only the refusal.
     async fn finish(
         &self,
         row: &WorkerRow,

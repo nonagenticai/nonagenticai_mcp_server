@@ -76,6 +76,7 @@ impl Worker {
             binding_revision: Some(revision),
             management: false,
             platform: false,
+            licence: None,
         };
         let resolved = ResolvedTool {
             manifest,
@@ -1173,5 +1174,88 @@ async fn expire_payloads_reports_the_batch_it_expired() {
     assert!(expired_at.is_some());
 
     assert_eq!(worker.store.expire_payloads().await.expect("expire"), 0);
+    worker.fixture.finish().await;
+}
+
+// ── finish reports the status it wrote ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn finish_returns_the_status_it_wrote_and_then_none() {
+    let worker = Worker::new(ToolLimits::default(), settings()).await;
+    let run = worker.accept().await;
+    let claimed = worker.claim(&run, 3600.0).await;
+
+    // A cancel that arrived during the run is the store's decision: it writes (and must return)
+    // `interrupted`, never the caller's computed `succeeded`. This is the value the worker's
+    // success log line reports, so returning the computed status would log a lie.
+    sqlx::query("UPDATE public.mcp_runs SET cancel_requested = true WHERE run_id = $1::uuid")
+        .bind(run.run_id.to_string())
+        .execute(&worker.fixture.pool)
+        .await
+        .expect("cancel request");
+    let result = json!({"ok": true});
+    let written = worker
+        .store
+        .finish(&claimed, "succeeded", Some(&result), None, false)
+        .await
+        .expect("finish");
+    assert_eq!(written.as_deref(), Some("interrupted"));
+
+    // The run is terminal now: a second finish changes nothing and says so, so the caller cannot
+    // log a second outcome.
+    let again = worker
+        .store
+        .finish(&claimed, "succeeded", Some(&result), None, false)
+        .await
+        .expect("second finish");
+    assert_eq!(again, None);
+    worker.fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_cancelled_finish_reports_the_recorded_status() {
+    let worker = Worker::new(ToolLimits::default(), settings()).await;
+    let run = worker.accept().await;
+    let claimed = worker.claim(&run, 3600.0).await;
+
+    sqlx::query("UPDATE public.mcp_runs SET cancel_requested = true WHERE run_id = $1::uuid")
+        .bind(run.run_id.to_string())
+        .execute(&worker.fixture.pool)
+        .await
+        .expect("cancel request");
+    let written = worker
+        .store
+        .finish(&claimed, "succeeded", None, None, true)
+        .await
+        .expect("finish");
+    assert_eq!(written.as_deref(), Some("cancelled"));
+
+    // The row agrees with the returned status.
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM public.mcp_runs WHERE run_id = $1::uuid")
+            .bind(run.run_id.to_string())
+            .fetch_one(&worker.fixture.pool)
+            .await
+            .expect("run status");
+    assert_eq!(status, "cancelled");
+    worker.fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_normal_finish_reports_the_callers_status() {
+    let worker = Worker::new(ToolLimits::default(), settings()).await;
+    let run = worker.accept().await;
+    let claimed = worker.claim(&run, 3600.0).await;
+    // The guard only allows `running -> succeeded`; a run that finished straight from
+    // `starting` is the reference's own invalid transition.
+    let started = worker.store.running(&claimed).await.expect("running");
+
+    let result = json!({"ok": true});
+    let written = worker
+        .store
+        .finish(&started, "succeeded", Some(&result), None, false)
+        .await
+        .expect("finish");
+    assert_eq!(written.as_deref(), Some("succeeded"));
     worker.fixture.finish().await;
 }

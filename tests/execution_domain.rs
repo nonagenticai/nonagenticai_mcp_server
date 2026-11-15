@@ -250,6 +250,7 @@ fn attribution_carries_the_subject_and_licence() {
         binding_revision: None,
         management: false,
         platform: false,
+        licence: None,
     };
     assert_eq!(
         attribution(&principal),

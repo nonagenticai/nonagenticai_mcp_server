@@ -313,6 +313,9 @@ impl WorkerStore {
     ///
     /// A run whose cancel was requested finishes as `cancelled` (absent) or `interrupted`, never
     /// with the caller's status: the reference overrides it the same way.
+    ///
+    /// Returns the status that was **written** — `None` when the run was already terminal — so a
+    /// caller's log line never reports an outcome the store overrode.
     pub async fn finish(
         &self,
         row: &WorkerRow,
@@ -320,13 +323,14 @@ impl WorkerStore {
         result: Option<&Value>,
         code: Option<&str>,
         absent: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let worker = row.worker()?;
         let run_id = row.run.run_id.to_string();
         let mut tx = self.pool.begin().await?;
         let current = self
             .owned(&mut tx, &row.run.run_id, worker, row.fence, true)
             .await?;
+        let mut written = None;
         if !current.run.status.is_terminal() {
             let mut status = status.to_owned();
             let mut result = result.cloned();
@@ -360,6 +364,7 @@ impl WorkerStore {
             .execute(&mut *tx)
             .await?;
             self.event(&mut tx, row, &status).await?;
+            written = Some(status);
         }
         if absent {
             // Channel loss/cancellation can leave an intent without an outcome. Finalize it
@@ -400,7 +405,20 @@ impl WorkerStore {
             self.event(&mut tx, row, "slot_quarantined").await?;
         }
         tx.commit().await?;
-        Ok(())
+        // The one per-run success line, after the outcome is durable, so every finish path logs
+        // it exactly once (controller, recovery's interrupts, the external driver's
+        // dispatch-unknown) and a rolled-back finish logs nothing. Ids, runtime and the class
+        // only: the inputs, the result and every credential stay in the database.
+        if let Some(status) = written.as_deref() {
+            tracing::info!(
+                run_id = %row.run.run_id,
+                tenant_id = %row.run.tenant_id,
+                runtime = ?row.run.runtime,
+                status = %status,
+                "run finished"
+            );
+        }
+        Ok(written)
     }
 
     /// Commit the intent to make one upstream call, before any network I/O.

@@ -182,18 +182,31 @@ impl BuiltinCaller {
     /// The builtin caller behind an authenticated principal that carries no catalog binding.
     ///
     /// The reference establishes this value at authentication, from the introspected licence
-    /// or the JWT `azp`. This service's authentication layer does not yet admit those callers;
-    /// the dispatch rule in [`crate::mcp`] reads a principal with no binding, so the same value
-    /// is derived from what that principal preserves:
+    /// or the JWT `azp`. [`crate::mcp`]'s dispatch rule reads a principal with no binding, so
+    /// the same value is derived from what the authentication layer preserved:
     ///
-    /// * an `azp` that names a [`PRINCIPAL_SCOPES`] entry is a Keycloak service account and is
-    ///   its own scope key;
-    /// * a licence subject (`svc:<tenant>:<app>`) takes [`licence_scope`] for its application —
-    ///   the surface only ever admits tenant-level licences, which is the reference's own rule;
-    /// * anything else is scoped to nothing and can see no tool.
+    /// * a principal carrying the introspected licence's `app` and `subject_kind` (the non-binding
+    ///   licence path) takes [`licence_scope`] from **those facts** — a member's per-login licence
+    ///   therefore gets no scope even when its subject has the `svc:` shape;
+    /// * otherwise an `azp` that names a [`PRINCIPAL_SCOPES`] entry is a Keycloak service account
+    ///   and is its own scope key;
+    /// * any other principal is scoped from its subject; anything unrecognised gets nothing.
     pub fn from_principal(principal: &Principal) -> Self {
         let subject = principal.subject.clone();
-        let (kind, scope) = classify(&subject);
+        let (kind, scope) = match principal.licence.as_ref() {
+            Some(facts) => {
+                // The authority's own report, including a missing `subject_kind` — which the
+                // reference gives no scope (`scope.py:95`). Never inferred from the subject.
+                let scope = licence_scope(Some(facts.app.as_str()), facts.subject_kind);
+                let kind = if facts.app == MCP_LICENCE_APP {
+                    CallerKind::TenantAuthor
+                } else {
+                    CallerKind::CarebusLicence
+                };
+                (kind, scope)
+            }
+            None => classify(&subject),
+        };
         Self {
             kind,
             subject,
@@ -275,5 +288,66 @@ mod tests {
             ""
         );
         assert_eq!(licence_scope(None, Some(SubjectKind::Tenant)), "");
+    }
+
+    /// A principal carrying the authority's reported licence facts.
+    fn facts_principal(app: &str, kind: SubjectKind, subject: &str) -> Principal {
+        Principal {
+            tenant_id: crate::auth::Rfc4122Uuid::parse("01900000-0000-7000-8000-0000000000aa")
+                .expect("tenant identity"),
+            license_id: crate::auth::Rfc4122Uuid::parse("01900000-0000-7000-8000-0000000000bb")
+                .expect("licence identity"),
+            subject: subject.to_owned(),
+            binding_id: None,
+            binding_revision: None,
+            management: false,
+            platform: false,
+            licence: Some(crate::auth::LicenceFacts {
+                app: app.to_owned(),
+                subject_kind: Some(kind),
+            }),
+        }
+    }
+
+    #[test]
+    fn the_caller_scope_comes_from_the_reported_facts_not_the_subject() {
+        // The same `svc:` subject for both; only the authority's kind decides the scope.
+        let tenant = facts_principal(CAREBUS_LICENCE_APP, SubjectKind::Tenant, "svc:t:care-bus");
+        let caller = BuiltinCaller::from_principal(&tenant);
+        assert_eq!(caller.scope, "licence:care-bus");
+        assert_eq!(caller.kind, CallerKind::CarebusLicence);
+
+        let member = facts_principal(CAREBUS_LICENCE_APP, SubjectKind::Member, "svc:t:care-bus");
+        let caller = BuiltinCaller::from_principal(&member);
+        assert_eq!(caller.scope, "", "a member licence gets no scope");
+        assert_eq!(caller.kind, CallerKind::CarebusLicence);
+
+        // A tenant-level mcp licence is the builder author; its audit rows need the licence id.
+        let author = facts_principal(MCP_LICENCE_APP, SubjectKind::Tenant, "svc:t:mcp");
+        let caller = BuiltinCaller::from_principal(&author);
+        assert_eq!(caller.scope, MCP_LICENCE_SCOPE);
+        assert_eq!(caller.kind, CallerKind::TenantAuthor);
+        assert_eq!(
+            caller.license_id.as_deref(),
+            Some("01900000-0000-7000-8000-0000000000bb")
+        );
+
+        let member_author = facts_principal(MCP_LICENCE_APP, SubjectKind::Member, "svc:t:mcp");
+        assert_eq!(BuiltinCaller::from_principal(&member_author).scope, "");
+
+        // A payload with no `subject_kind` gets NOTHING, even when the subject has the `svc:`
+        // shape the tenant licence carries — the reference's own rule (`scope.py:95`).
+        let none = Principal {
+            licence: Some(crate::auth::LicenceFacts {
+                app: CAREBUS_LICENCE_APP.to_owned(),
+                subject_kind: None,
+            }),
+            ..facts_principal(CAREBUS_LICENCE_APP, SubjectKind::Tenant, "svc:t:care-bus")
+        };
+        assert_eq!(
+            BuiltinCaller::from_principal(&none).scope,
+            "",
+            "a licence with no reported kind is unscoped"
+        );
     }
 }

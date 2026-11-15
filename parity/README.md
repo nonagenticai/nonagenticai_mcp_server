@@ -1,4 +1,4 @@
-# Parity contract — Phase 0 evidence
+# Parity contract — evidence
 
 `parity.toml` pins the source: `nonagenticai/nonagenticai_mcp_server-python-archive` @
 `22ac1ce` (108 OpenAPI operations). The source is frozen for the life of the port — security
@@ -16,8 +16,9 @@ The two network gates use **coding-testing's own implementation**
 
 ## 1. schema-diff — PASS
 
-Source = the live Python database (read-only, direct to the primary — never through
-pgbouncer). Target = a fresh `postgres:18` with this repo's migrations applied.
+Source = the live database (read-only, direct to the primary — never through pgbouncer), the
+one the Python reference's migrations built and the Rust migrator adopted. Target = a fresh
+`postgres:18` with this repo's migrations applied.
 
 ```sh
 SRC_DSN=postgresql://... PYTHONPATH=<coding-testing>/src \
@@ -50,13 +51,14 @@ PYTHONPATH=<coding-testing>/src python parity/tools/openapi_diff.py \
 ```
 
 ```
-equal=true  vacuous=false  matched 4/4
-missing 0 · extra 0 · changed 0 · ignored 104
+equal=true  vacuous=false  matched 108/108
+missing 0 · extra 0 · changed 0 · cosmetic 0 · source_conflicts 0 · ignored 0
 ```
 
-The four matched operations are the health group (`/health`, `/health/live`, `/health/ready`,
-`/api/health`). The 104 ignored ones are every unported source operation, grouped by the phase
-that ports them in `parity.toml`'s `[openapi_diff.ignore]`; each phase deletes its own group.
+All 108 source operations are served, so the ignore list is empty (landed 2026-11-15: phase
+5A, phase 5B, the builtin surface and the phase-6 fr channel). The contract now guards against
+regression: a missing, extra or changed operation fails the diff with no exclusion to hide
+behind.
 
 _Inline `$defs` (2026-11-14)._ The runner inlines each operation's local `$defs` before the diff.
 The reference embeds pydantic's `model_json_schema()` in a request body, where `$id` gives the
@@ -69,7 +71,7 @@ unresolvable — the source document does not diff against **itself** on `POST /
 above is unchanged.
 
 
-## 3. MCP handshake — PASS
+## 3. MCP transport — PASS
 
 `tests/http.rs::mcp_initialize_negotiates_a_protocol_version` asserts the **exact** `initialize`
 envelope captured from the source's own fastmcp transport
@@ -80,8 +82,15 @@ envelope captured from the source's own fastmcp transport
  "serverInfo":{"name":"Executable catalog","version":"2.0.0"}}
 ```
 
-`mcp_tools_list_is_empty_phase_0` asserts `tools/list` is `[]`, and both tests assert the
-response is SSE-framed (`text/event-stream`), not plain JSON.
+Both that test and the `tools/list` tests assert the response is SSE-framed
+(`text/event-stream`), not plain JSON.
+
+`tools/list` is served from the catalog projection for a binding principal
+(`tests/http.rs`, over the real router and a real Postgres binding) and from the builtin
+provider for a licence caller with no binding (`tests/builtin_provider.rs`); the 34 first-party
+tools' names, scopes, descriptions and input schemas are the reference's own `tools/list`
+output, captured in `tests/fixtures/builtin/oracle.json`. A member's per-login care-bus licence
+authenticates and gets an **empty** listing, every call denied — the reference's own rule.
 
 _Phase 1 note:_ the middleware's 401 body is `{"error":"unauthorized"}`, not FastAPI's
 `{"detail": …}` that the template's `AppError` renders.

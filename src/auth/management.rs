@@ -88,6 +88,7 @@ impl ManagementAuthorizer {
             binding_revision: None,
             management: true,
             platform,
+            licence: None,
         })
     }
 }

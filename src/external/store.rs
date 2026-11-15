@@ -113,7 +113,7 @@ impl ExternalStore {
         status: &str,
         result: Option<&Value>,
         code: Option<&str>,
-    ) -> Result<(), WorkerStoreError> {
+    ) -> Result<Option<String>, WorkerStoreError> {
         self.store.finish(row, status, result, code, true).await
     }
 
