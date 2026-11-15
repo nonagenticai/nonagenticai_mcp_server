@@ -32,3 +32,9 @@ tests/fixtures/phase3b/policy.json:(100\.64\.0\.1|100\.100\.100\.200|db\.interna
 # of this estate: `api.internal` and `auth.internal` are refusal cases, and the suffix literals
 # are the deny list itself — the same justification as the phase-3B entries above.
 src/sources/models.rs:(\.internal|api\.internal|auth\.internal)
+
+# Phase builtin (2026-11-15). The web scraper's SSRF guard is a DENY list, so its literals are
+# the test: `100.64.0.0/10` is the IANA shared range, `.internal` / `.svc.cluster.local` are
+# suffix rules the reference refuses, and none of them names this estate's infrastructure.
+src/builtin/web/scrape.rs:(100\.64\.0|\.internal|192\.0\.0\.(9|10))
+tests/builtin_web.rs:(100\.64\.0|\.svc\.cluster\.local|\.internal)

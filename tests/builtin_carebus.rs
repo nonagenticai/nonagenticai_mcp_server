@@ -509,7 +509,7 @@ async fn crm_verify_customer_returns_the_verified_customer() {
     );
     assert_eq!(
         out.as_object()
-            .and_then(|object| object.keys().last())
+            .and_then(|object| object.keys().next_back())
             .map(String::as_str),
         Some("verified"),
         "verified is the last key, as in the reference"
@@ -964,7 +964,7 @@ async fn a_service_caller_keeps_the_pinned_token_and_sends_no_tenant() {
         Some("Bearer pinned-token")
     );
     assert!(
-        request.headers.get("x-tenant-id").is_none(),
+        !request.headers.contains_key("x-tenant-id"),
         "the pinned client names no tenant: {:?}",
         request.headers
     );
@@ -1309,5 +1309,5 @@ async fn no_token_set_sends_no_authorization_header() {
     order::get_order(&service, &json!("ORD-1"))
         .await
         .expect("an order");
-    assert!(only(&stub).headers.get("authorization").is_none());
+    assert!(!only(&stub).headers.contains_key("authorization"));
 }
