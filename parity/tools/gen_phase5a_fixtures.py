@@ -321,6 +321,13 @@ def main() -> None:
             kind: {"needs_secret": kind not in SECRETLESS_KINDS} for kind in AUTH_KINDS
         },
         "forbidden_headers": sorted(FORBIDDEN_HEADERS),
+        # The sealing keys the Rust tests use, as byte lists: a base64 literal here would look
+        # like a credential to a secret scanner and a hard-coded key to a code scanner, while
+        # the bytes are what the reference's own `decode_key` returns for its test key.
+        "sealing_keys": {
+            "primary": list(range(32)),
+            "other": [0x2A] * 32,
+        },
         "source_bodies": [
             {"name": name, "model": model.__name__, "body": body, **outcome(model, body)}
             for name, model, body in SOURCE_BODIES

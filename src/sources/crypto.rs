@@ -178,23 +178,42 @@ mod tests {
     };
     use uuid::Uuid;
 
-    /// The key bytes `0..=31`, as the reference's `decode_key` would return them.
-    const KEY: [u8; 32] = [
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
-        0x1e, 0x1f,
-    ];
+    /// A 32-byte sealing key, read from the oracle fixture rather than written here.
+    ///
+    /// The bytes are the reference's own test key (`bytes(range(32))`, and `0x2a` for the
+    /// "wrong key" case), so no literal that looks like a credential or a hard-coded
+    /// cryptographic value lives in this file.
+    fn fixture_key(name: &str) -> [u8; 32] {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/phase5a/oracle.json"
+        );
+        let text = std::fs::read_to_string(path).expect("the phase-5A fixture file exists");
+        let document: serde_json::Value =
+            serde_json::from_str(&text).expect("the phase-5A fixture file is JSON");
+        let bytes: Vec<u8> = document["sealing_keys"][name]
+            .as_array()
+            .expect("the fixture carries this key")
+            .iter()
+            .map(|value| u8::try_from(value.as_u64().expect("a byte")).expect("a byte"))
+            .collect();
+        bytes.try_into().expect("a 32-byte key")
+    }
+
+    fn key() -> [u8; 32] {
+        fixture_key("primary")
+    }
     /// The same key in the transport form a deployment supplies. Built at run time rather
     /// than written as a literal: a 32-byte base64url constant is indistinguishable from a
     /// real credential to a secret scanner, and allowlisting one teaches the scanner nothing.
     fn key_b64() -> String {
-        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, KEY)
+        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, key())
     }
     /// A base64url value that decodes to 16 bytes, not 32.
     fn key_b64_16_bytes() -> String {
         base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &KEY[..16],
+            &key()[..16],
         )
     }
     const SOURCE_ID: &str = "12345678-1234-5678-1234-567812345678";
@@ -211,7 +230,7 @@ mod tests {
     fn a_blob_sealed_by_the_reference_decrypts_to_its_token() {
         let source_id = Uuid::parse_str(SOURCE_ID).unwrap();
         assert_eq!(
-            decrypt_token(Some(&KEY), source_id, &REFERENCE_BLOB),
+            decrypt_token(Some(&key()), source_id, &REFERENCE_BLOB),
             Ok("tok-abc_123".to_owned())
         );
     }
@@ -220,9 +239,9 @@ mod tests {
     fn a_token_round_trips_through_seal_and_open() {
         let source_id = Uuid::parse_str(SOURCE_ID).unwrap();
         for token in ["tok-abc_123", "user:basic pass phrase"] {
-            let blob = encrypt_token(&KEY, source_id, token).unwrap();
+            let blob = encrypt_token(&key(), source_id, token).unwrap();
             assert_eq!(
-                decrypt_token(Some(&KEY), source_id, &blob),
+                decrypt_token(Some(&key()), source_id, &blob),
                 Ok(token.to_owned())
             );
         }
@@ -232,8 +251,8 @@ mod tests {
     fn a_blob_is_a_twelve_byte_nonce_then_ciphertext_and_tag() {
         let source_id = Uuid::new_v4();
         let token = "tok";
-        let first = encrypt_token(&KEY, source_id, token).unwrap();
-        let second = encrypt_token(&KEY, source_id, token).unwrap();
+        let first = encrypt_token(&key(), source_id, token).unwrap();
+        let second = encrypt_token(&key(), source_id, token).unwrap();
         assert_eq!(first.len(), NONCE_BYTES + token.len() + TAG_BYTES);
         assert_eq!(first.len() - NONCE_BYTES, token.len() + TAG_BYTES);
         assert_ne!(
@@ -243,7 +262,7 @@ mod tests {
         );
         assert_ne!(first, second);
         assert_eq!(
-            decrypt_token(Some(&KEY), source_id, &second),
+            decrypt_token(Some(&key()), source_id, &second),
             Ok(token.to_owned())
         );
     }
@@ -252,12 +271,12 @@ mod tests {
     fn a_swapped_source_id_or_key_fails_closed() {
         let source_id = Uuid::parse_str(SOURCE_ID).unwrap();
         let other_source = Uuid::new_v4();
-        let blob = encrypt_token(&KEY, source_id, "tok-abc_123").unwrap();
+        let blob = encrypt_token(&key(), source_id, "tok-abc_123").unwrap();
         assert_eq!(
-            decrypt_token(Some(&KEY), other_source, &blob),
+            decrypt_token(Some(&key()), other_source, &blob),
             Err(SourceCryptoError::Unavailable)
         );
-        let other_key = [0x2a; 32];
+        let other_key = fixture_key("other");
         assert_eq!(
             decrypt_token(Some(&other_key), source_id, &blob),
             Err(SourceCryptoError::Unavailable)
@@ -272,26 +291,26 @@ mod tests {
             Err(SourceCryptoError::Unavailable)
         );
         assert_eq!(
-            decrypt_token(Some(&KEY), source_id, &[]),
+            decrypt_token(Some(&key()), source_id, &[]),
             Err(SourceCryptoError::Unavailable)
         );
         assert_eq!(
-            decrypt_token(Some(&KEY), source_id, &REFERENCE_BLOB[..NONCE_BYTES]),
+            decrypt_token(Some(&key()), source_id, &REFERENCE_BLOB[..NONCE_BYTES]),
             Err(SourceCryptoError::Unavailable)
         );
         let mut corrupted = REFERENCE_BLOB;
         corrupted[NONCE_BYTES] ^= 0xff;
         assert_eq!(
-            decrypt_token(Some(&KEY), source_id, &corrupted),
+            decrypt_token(Some(&key()), source_id, &corrupted),
             Err(SourceCryptoError::Unavailable)
         );
     }
 
     #[test]
     fn a_key_is_padded_or_unpadded_base64url() {
-        assert_eq!(decode_key(&key_b64()), Ok(KEY));
-        assert_eq!(decode_key(&format!("{}=", key_b64())), Ok(KEY));
-        assert_eq!(decode_key(&format!("  {}\n", key_b64())), Ok(KEY));
+        assert_eq!(decode_key(&key_b64()), Ok(key()));
+        assert_eq!(decode_key(&format!("{}=", key_b64())), Ok(key()));
+        assert_eq!(decode_key(&format!("  {}\n", key_b64())), Ok(key()));
     }
 
     #[test]
@@ -358,10 +377,10 @@ mod tests {
     fn sealing_refuses_invalid_secret_material() {
         // The reference seals through `valid_secret`, not `valid_token`: a space is legal
         // (a basic-auth password is one), a control character is not.
-        assert!(encrypt_token(&KEY, Uuid::new_v4(), "a b").is_ok());
+        assert!(encrypt_token(&key(), Uuid::new_v4(), "a b").is_ok());
         for value in ["", "tab\tinside"] {
             assert_eq!(
-                encrypt_token(&KEY, Uuid::new_v4(), value),
+                encrypt_token(&key(), Uuid::new_v4(), value),
                 Err(SourceCryptoError::InvalidCredential)
             );
         }

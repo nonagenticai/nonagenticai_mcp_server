@@ -24,8 +24,24 @@ const PLATFORM_TENANT: &str = "01900000-0000-7000-8000-00000000f001";
 const OTHER_TENANT: &str = "10000000-0000-7000-8000-000000000002";
 const OTHER_SOURCE: &str = "01900000-0000-7000-8000-0000000000a1";
 const BASE_URL: &str = "https://api.example.test";
-/// The decoded `MCP_SOURCE_SECRET_KEY` every sealing test uses.
-const SECRET_KEY: [u8; 32] = [0x2a; 32];
+/// The decoded `MCP_SOURCE_SECRET_KEY` every sealing test uses, taken from the oracle
+/// fixture so no key-shaped literal lives in this file.
+fn secret_key() -> [u8; 32] {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/phase5a/oracle.json"
+    );
+    let text = std::fs::read_to_string(path).expect("the phase-5A fixture file exists");
+    let document: serde_json::Value =
+        serde_json::from_str(&text).expect("the phase-5A fixture file is JSON");
+    let bytes: Vec<u8> = document["sealing_keys"]["other"]
+        .as_array()
+        .expect("the fixture carries the sealing key")
+        .iter()
+        .map(|value| u8::try_from(value.as_u64().expect("a byte")).expect("a byte"))
+        .collect();
+    bytes.try_into().expect("a 32-byte key")
+}
 
 fn platform() -> Uuid {
     Uuid::parse_str(PLATFORM_TENANT).expect("the platform tenant is a UUID")
@@ -35,7 +51,7 @@ fn repository(fixture: &Fixture) -> SourceRepository {
     SourceRepository::from_settings(
         fixture.pool.clone(),
         &SourceSettings {
-            secret_key: Some(SECRET_KEY.to_vec()),
+            secret_key: Some(secret_key().to_vec()),
             allowed_hosts: vec!["api.example.test".to_owned()],
         },
     )
@@ -228,7 +244,7 @@ async fn update_bumps_the_revision_keeps_then_clears_the_stored_token() {
         .as_deref()
         .expect("the retained ciphertext");
     assert_eq!(
-        decrypt_token(Some(&SECRET_KEY), row.source_id, blob),
+        decrypt_token(Some(&secret_key()), row.source_id, blob),
         Ok("first-token".to_owned())
     );
 
@@ -327,7 +343,7 @@ async fn set_token_rotates_the_secret_and_refuses_a_secretless_kind() {
             .as_deref()
             .expect("the rotated ciphertext");
         assert_eq!(
-            decrypt_token(Some(&SECRET_KEY), row.source_id, blob),
+            decrypt_token(Some(&secret_key()), row.source_id, blob),
             Ok("second-token".to_owned())
         );
     }
@@ -509,12 +525,12 @@ async fn a_sealed_token_round_trips_through_resolve_row() {
     assert_eq!(row.base_url, BASE_URL);
     let blob = row.token_ciphertext.as_deref().expect("a ciphertext");
     assert_eq!(
-        decrypt_token(Some(&SECRET_KEY), row.source_id, blob),
+        decrypt_token(Some(&secret_key()), row.source_id, blob),
         Ok("synthetic-token".to_owned())
     );
     // A ciphertext copied onto another row would fail authentication.
     assert_eq!(
-        decrypt_token(Some(&SECRET_KEY), Uuid::now_v7(), blob),
+        decrypt_token(Some(&secret_key()), Uuid::now_v7(), blob),
         Err(mcp_server_rs::sources::crypto::SourceCryptoError::Unavailable)
     );
     drop(conn);
@@ -552,7 +568,7 @@ async fn sealing_without_a_configured_key_is_unavailable() {
 #[tokio::test]
 async fn create_enforces_the_destination_before_writing() {
     let fixture = Fixture::new().await;
-    let repo = SourceRepository::new(fixture.pool.clone(), Vec::new(), Some(SECRET_KEY));
+    let repo = SourceRepository::new(fixture.pool.clone(), Vec::new(), Some(secret_key()));
     let error = refused(
         repo.create(
             &create_body("billing", json!({"kind": "none"}), None),

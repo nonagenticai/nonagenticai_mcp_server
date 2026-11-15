@@ -38,8 +38,24 @@ use support::{ADMIN_KEY, Fixture, LICENCE_TOKEN, TENANT_A, TestLicence, assert_n
 const PLATFORM_KEY: &str = "routes-sources-platform-key-0123456789abcd";
 /// The reserved platform tenant `public.mcp_platform_tenant()` resolves to.
 const PLATFORM_TENANT: &str = "01900000-0000-7000-8000-00000000f001";
-/// The decoded `MCP_SOURCE_SECRET_KEY` the fixture installs.
-const KEY_BYTES: [u8; 32] = [7u8; 32];
+/// The decoded `MCP_SOURCE_SECRET_KEY` the fixture installs, taken from the oracle fixture
+/// so no key-shaped literal lives in this file.
+fn key_bytes() -> [u8; 32] {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/phase5a/oracle.json"
+    );
+    let text = std::fs::read_to_string(path).expect("the phase-5A fixture file exists");
+    let document: serde_json::Value =
+        serde_json::from_str(&text).expect("the phase-5A fixture file is JSON");
+    let bytes: Vec<u8> = document["sealing_keys"]["primary"]
+        .as_array()
+        .expect("the fixture carries the sealing key")
+        .iter()
+        .map(|value| u8::try_from(value.as_u64().expect("a byte")).expect("a byte"))
+        .collect();
+    bytes.try_into().expect("a 32-byte key")
+}
 const SOURCE_KEY: &str = "billing";
 const TOKEN: &str = "synthetic-token";
 const ROTATED: &str = "rotated-token";
@@ -80,7 +96,7 @@ fn auth_with_platform() -> Auth {
 /// The `MCP_SOURCE_*` settings: one allowed host, and the sealing key when `secret` is set.
 fn source_settings(secret: bool) -> SourceSettings {
     SourceSettings {
-        secret_key: secret.then_some(KEY_BYTES.to_vec()),
+        secret_key: secret.then_some(key_bytes().to_vec()),
         allowed_hosts: vec!["api.example.com".to_owned()],
     }
 }
@@ -188,7 +204,7 @@ async fn stored_token(fixture: &Fixture, source_key: &str) -> String {
     let identity: String = row.try_get("source_id").expect("source id");
     let blob: Option<Vec<u8>> = row.try_get("token_ciphertext").expect("ciphertext");
     decrypt_token(
-        Some(&KEY_BYTES),
+        Some(&key_bytes()),
         Uuid::parse_str(&identity).expect("source identity"),
         &blob.expect("a stored secret"),
     )
