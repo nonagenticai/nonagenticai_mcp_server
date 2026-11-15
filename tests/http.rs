@@ -354,6 +354,81 @@ async fn mcp_accepts_the_in_cluster_host_its_callers_use() {
     );
 }
 
+/// A licence-introspection stub for the production constructor: one active tenant-level
+/// licence, the identity the fixture's binding rows are issued to.
+async fn licence_stub() -> String {
+    use axum::extract::Json as AxumJson;
+    use axum::routing::post;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the licence stub");
+    let address = listener.local_addr().expect("stub address");
+    let router = Router::new().route(
+        "/license/introspect",
+        post(|| async {
+            AxumJson(json!({
+                "active": true,
+                "app": {"key": support::GATEWAY_APP_KEY},
+                "tenant_id": support::TENANT_A,
+                "license_id": support::LICENCE_ID,
+                "subject_id": format!("svc:{}:synthetic", support::TENANT_A),
+                "subject_kind": "tenant",
+                "expires_at": "2099-01-01T00:00:00.000000+00:00",
+                "token_expires_at": null,
+            }))
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("licence stub");
+    });
+    format!("http://{address}/license/introspect")
+}
+
+#[tokio::test]
+async fn the_production_app_authenticates_a_binding_a_caller_holds() {
+    // `app()` and the binary build their authentication through the same `production_auth`
+    // constructor (the binary then adds the builder), and it must install the DATABASE binding
+    // authority: a real `mcp_bindings` row (created through the fixture's management route)
+    // authenticates and the request reaches the transport. Before this wiring the default
+    // authority answered `503 authority_unavailable` for every binding token, live included.
+    let fixture = support::Fixture::new().await;
+    support::binding_fixture_with_tools(
+        &fixture,
+        &[support::tool_manifest("alpha_tool", support::TOOL_ALPHA)],
+    )
+    .await;
+    let admin =
+        fixture.app_with_page_size(10, Arc::new(PgBindingAuthority::new(fixture.pool.clone())));
+    let token = binding_token(&support::create_binding(&admin).await);
+
+    let auth_config = AuthConfig {
+        license_introspect_url: Some(licence_stub().await),
+        license_app_key: Some(support::GATEWAY_APP_KEY.to_owned()),
+        license_allow_http: true,
+        ..AuthConfig::default()
+    };
+    let app = mcp_server_rs::app(fixture.state(), &auth_config).expect("the production app");
+    let (status, _content_type, reply) = support::mcp_post(
+        &app,
+        Some(&token),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "production", "version": "0"}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["result"]["protocolVersion"], "2025-06-18");
+    fixture.finish().await;
+}
+
 // ── tools/list: the catalog projection ────────────────────────────────────────────────────
 
 fn tools_list(cursor: Option<&str>) -> serde_json::Value {
