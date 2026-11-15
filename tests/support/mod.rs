@@ -507,6 +507,7 @@ pub fn principal() -> mcp_server_rs::auth::Principal {
         binding_revision: None,
         management: true,
         platform: false,
+        licence: None,
     }
 }
 

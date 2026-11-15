@@ -160,6 +160,7 @@ pub async fn live(
         binding_revision: Some(i64::from(binding.revision.get())),
         management: false,
         platform: false,
+        licence: None,
     };
     let current = resolver
         .resolve(&principal)

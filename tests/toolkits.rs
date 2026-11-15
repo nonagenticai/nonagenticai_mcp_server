@@ -248,6 +248,7 @@ fn principal(tenant: &str, management: bool) -> Principal {
         binding_revision: None,
         management,
         platform: false,
+        licence: None,
     }
 }
 

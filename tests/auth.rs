@@ -23,7 +23,7 @@ use tower::ServiceExt;
 
 use mcp_server_rs::auth::{
     Auth, AuthConfig, AuthError, AuthPrincipal, Binding, BindingAuthority, BoxFuture,
-    LicenseIdentity, Rfc4122Uuid, protect,
+    LicenseIdentity, Rfc4122Uuid, SubjectKind, protect,
 };
 use mcp_server_rs::{AppState, app_with_auth};
 
@@ -200,6 +200,13 @@ async fn whoami(AuthPrincipal(principal): AuthPrincipal) -> Json<Value> {
         "binding_revision": principal.binding_revision,
         "management": principal.management,
         "platform": principal.platform,
+        "licence": principal.licence.as_ref().map(|facts| json!({
+            "app": facts.app,
+            "subject_kind": facts.subject_kind.map(|kind| match kind {
+                SubjectKind::Tenant => "tenant",
+                SubjectKind::Member => "member",
+            }),
+        })),
     }))
 }
 
@@ -406,6 +413,7 @@ async fn binding_credentials_resolve_a_principal() {
             "binding_revision": 7,
             "management": false,
             "platform": false,
+            "licence": Value::Null,
         })
     );
     // A token the binding authority refuses is a 401, not a principal.
@@ -545,6 +553,7 @@ async fn management_accepts_the_operator_key() {
             "binding_revision": Value::Null,
             "management": true,
             "platform": false,
+            "licence": Value::Null,
         })
     );
 }
@@ -731,6 +740,10 @@ async fn a_care_bus_licence_without_a_binding_is_a_builtin_caller() {
     assert_eq!(body["subject"], format!("svc:{TENANT}:care-bus"));
     assert_eq!(body["management"], json!(false));
     assert_eq!(body["platform"], json!(false));
+    // The facts the builtin caller derives its scope from: the authority's app and kind, not
+    // the shape of the subject.
+    assert_eq!(body["licence"]["app"], json!("care-bus"));
+    assert_eq!(body["licence"]["subject_kind"], json!("tenant"));
 
     // The RAW introspection: the token and no application key (`licenses.py:162-166`).
     let request = authority
@@ -797,16 +810,16 @@ async fn a_builtin_caller_needs_x_tenant_id_not_authorization() {
 }
 
 #[tokio::test]
-async fn a_member_care_bus_licence_is_refused() {
-    // The adversarial shape: an `svc:` subject that is NOT a tenant-level licence. The
-    // reference authenticates it and then gives it no scope (`scope.py:95` → empty listing); the
-    // port has no "care-bus but unscoped" principal, so it refuses 401 — strictly narrower, and
-    // unreachable today because licences issues `svc:` only as a tenant-level licence.
+async fn a_member_care_bus_licence_gets_no_builtin_scope() {
+    // The reference authenticates a member's per-login care-bus licence and then gives it no
+    // scope (`scope.py:95`): an empty listing, every call denied. The subject deliberately
+    // keeps the `svc:` shape — only the authority's reported `subject_kind` may decide the
+    // scope, so the member kind must travel on the principal.
     let mut licence = active_licence("care-bus", TENANT, "member");
     licence["subject_id"] = json!(format!("svc:{TENANT}:care-bus"));
     let authority = authority(licence).await;
     let app = probe(auth(&config(Some(&authority.url), None, None)));
-    let (status, headers, body) = call(
+    let (status, _, body) = call(
         app,
         Request::post("/mcp")
             .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
@@ -814,5 +827,8 @@ async fn a_member_care_bus_licence_is_refused() {
             .unwrap(),
     )
     .await;
-    assert_unauthorized(status, &headers, &body);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["binding_id"], Value::Null);
+    assert_eq!(body["licence"]["app"], json!("care-bus"));
+    assert_eq!(body["licence"]["subject_kind"], json!("member"));
 }

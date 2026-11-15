@@ -500,8 +500,17 @@ impl ExternalDriver {
         result: Option<&serde_json::Value>,
         code: Option<&str>,
     ) {
-        if let Err(error) = self.store.finish(row, status, result, code).await {
-            log_store("finish", row, &error);
+        match self.store.finish(row, status, result, code).await {
+            // The one per-run success line, with the status the store actually wrote. The result
+            // and the error stay in the database.
+            Ok(Some(written)) => tracing::info!(
+                run = %row.run.run_id,
+                runtime = ?row.run.runtime,
+                status = %written,
+                "external run finished"
+            ),
+            Ok(None) => {}
+            Err(error) => log_store("finish", row, &error),
         }
     }
 }

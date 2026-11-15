@@ -64,6 +64,7 @@ async fn bound_fixture(queue_seconds: u32, settings: ExecutionSettings) -> Bound
         binding_revision: Some(revision),
         management: false,
         platform: false,
+        licence: None,
     };
     let resolved = ResolvedTool {
         manifest,
