@@ -949,6 +949,102 @@ impl MinterSettings {
     }
 }
 
+/// The `/mcp/internal/*` Keycloak service-token verifier (`MCP_INTERNAL_KEYCLOAK_*`).
+///
+/// All four settings or none. All four unset ⇒ the verifier is off and every service token is
+/// refused. A *partial* configuration is also off — logged as an error, never "accept any realm
+/// token" (reference `keycloak.py:76-101`). Audience and allowed clients are comma-separated,
+/// trimmed, empty entries dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeycloakSettings {
+    /// `MCP_INTERNAL_KEYCLOAK_URL`: the Keycloak base URL, e.g. `https://auth.nonagentic.ai`.
+    pub url: String,
+    /// `MCP_INTERNAL_KEYCLOAK_REALM`: the realm whose tokens the internal routes accept.
+    pub realm: String,
+    /// `MCP_INTERNAL_KEYCLOAK_AUDIENCE`: the audiences a token's `aud` must intersect.
+    pub audiences: Vec<String>,
+    /// `MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS`: the `azp` clients that may call internal routes.
+    pub allowed_clients: Vec<String>,
+}
+
+impl KeycloakSettings {
+    /// The reference's setting names, in the order this module reports them as missing.
+    pub const REQUIRED_ENV: [&str; 4] = [
+        "MCP_INTERNAL_KEYCLOAK_URL",
+        "MCP_INTERNAL_KEYCLOAK_REALM",
+        "MCP_INTERNAL_KEYCLOAK_AUDIENCE",
+        "MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS",
+    ];
+
+    pub fn from_env() -> Result<Option<Self>, ConfigError> {
+        let get = |key: &str| std::env::var(key).ok();
+        let allow_http = bool_setting(&get, "MCP_LICENSE_ALLOW_HTTP", false)?;
+        Self::from_lookup(get, allow_http)
+    }
+
+    /// Testable core of [`KeycloakSettings::from_env`]. Empty values count as unset.
+    ///
+    /// `allow_http` is `MCP_LICENSE_ALLOW_HTTP`, the switch the reference applies to this URL
+    /// (`config.py:363`).
+    pub fn from_lookup(
+        get: impl Fn(&str) -> Option<String>,
+        allow_http: bool,
+    ) -> Result<Option<Self>, ConfigError> {
+        let get = |key: &str| get(key).filter(|value| !value.trim().is_empty());
+        let url = get("MCP_INTERNAL_KEYCLOAK_URL");
+        let realm = get("MCP_INTERNAL_KEYCLOAK_REALM");
+        let audience = get("MCP_INTERNAL_KEYCLOAK_AUDIENCE");
+        let clients = get("MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS");
+        if url.is_none() && realm.is_none() && audience.is_none() && clients.is_none() {
+            return Ok(None);
+        }
+        let mut missing = Vec::new();
+        if url.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_URL");
+        }
+        if realm.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_REALM");
+        }
+        let audiences = audience.as_deref().map(split_list).unwrap_or_default();
+        if audience.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_AUDIENCE");
+        } else if audiences.is_empty() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_AUDIENCE (empty list)");
+        }
+        let allowed_clients = clients.as_deref().map(split_list).unwrap_or_default();
+        if clients.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS");
+        } else if allowed_clients.is_empty() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS (empty list)");
+        }
+        if !missing.is_empty() {
+            tracing::error!(
+                "Keycloak JWT auth DISABLED: partially configured, missing {}; \
+                 every /mcp/internal request will be refused",
+                missing.join(", ")
+            );
+            return Ok(None);
+        }
+        let (url, realm) = (url.unwrap_or_default(), realm.unwrap_or_default());
+        checked_authority_url("MCP_INTERNAL_KEYCLOAK_URL", &url, allow_http)?;
+        Ok(Some(Self {
+            url,
+            realm,
+            audiences,
+            allowed_clients,
+        }))
+    }
+}
+
+/// Comma-separated list entries, trimmed, empty ones dropped (the reference's `_split`).
+fn split_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Authentication configuration for the `/mcp` surface.
 ///
 /// Env names are the reference service's `src/config.py` names: pydantic-settings with prefix
@@ -977,6 +1073,9 @@ pub struct AuthConfig {
     pub platform_admin_key_file: Option<PathBuf>,
     /// `MCP_MAX_MANAGEMENT_BYTES`: bound on a buffered management request body.
     pub max_management_bytes: usize,
+    /// `MCP_INTERNAL_KEYCLOAK_*`: the service-token verifier for `/mcp/internal/*`.
+    /// `None` = off; a partial configuration is off as well ([`KeycloakSettings`]).
+    pub keycloak: Option<KeycloakSettings>,
 }
 
 impl Default for AuthConfig {
@@ -992,6 +1091,7 @@ impl Default for AuthConfig {
             admin_tenant_ids: Vec::new(),
             platform_admin_key_file: None,
             max_management_bytes: 262_144,
+            keycloak: None,
         }
     }
 }
@@ -1005,10 +1105,12 @@ impl AuthConfig {
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
         let timeout_seconds = float_setting(&get, "MCP_LICENSE_TIMEOUT_SECONDS", 3.0, 0.0, 10.0)?;
+        // The reference applies the licence HTTP switch to the internal Keycloak URL too.
+        let license_allow_http = bool_setting(&get, "MCP_LICENSE_ALLOW_HTTP", false)?;
         let config = Self {
             license_introspect_url: get("LICENSE_INTROSPECT_URL"),
             license_app_key: get("MCP_LICENSE_APP_KEY"),
-            license_allow_http: bool_setting(&get, "MCP_LICENSE_ALLOW_HTTP", false)?,
+            license_allow_http,
             license_timeout: Duration::from_secs_f64(timeout_seconds),
             license_max_response_bytes: int_setting(
                 &get,
@@ -1034,6 +1136,7 @@ impl AuthConfig {
                 1,
                 1_048_576,
             )?,
+            keycloak: KeycloakSettings::from_lookup(|key| get(key), license_allow_http)?,
         };
         config.validate()?;
         Ok(config)
@@ -1049,7 +1152,27 @@ impl AuthConfig {
             });
         }
         if let Some(url) = &self.license_introspect_url {
-            checked_authority_url(url, self.license_allow_http)?;
+            checked_authority_url("LICENSE_INTROSPECT_URL", url, self.license_allow_http)?;
+        }
+        if let Some(keycloak) = &self.keycloak {
+            // Hand-built settings (tests, a supervisor) cannot skip the same rules.
+            checked_authority_url(
+                "MCP_INTERNAL_KEYCLOAK_URL",
+                &keycloak.url,
+                self.license_allow_http,
+            )?;
+            if keycloak.audiences.is_empty() {
+                return Err(ConfigError::Invalid {
+                    name: "MCP_INTERNAL_KEYCLOAK_AUDIENCE",
+                    reason: "the audience list must not be empty".into(),
+                });
+            }
+            if keycloak.allowed_clients.is_empty() {
+                return Err(ConfigError::Invalid {
+                    name: "MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS",
+                    reason: "the allowed-client list must not be empty".into(),
+                });
+            }
         }
         if self.admin_key_file.is_some()
             && (self.license_app_key.is_none() || self.admin_tenant_ids.is_empty())
@@ -1071,9 +1194,13 @@ impl AuthConfig {
 
 /// An authority URL: HTTPS, or HTTP only when explicitly approved for an in-cluster endpoint.
 /// Credentials, query strings and fragments are refused (the reference service's `checked_url`).
-fn checked_authority_url(value: &str, allow_http: bool) -> Result<(), ConfigError> {
+fn checked_authority_url(
+    name: &'static str,
+    value: &str,
+    allow_http: bool,
+) -> Result<(), ConfigError> {
     let invalid = |reason: &str| ConfigError::Invalid {
-        name: "LICENSE_INTROSPECT_URL",
+        name,
         reason: reason.to_owned(),
     };
     let rest = if let Some(rest) = value.strip_prefix("https://") {
