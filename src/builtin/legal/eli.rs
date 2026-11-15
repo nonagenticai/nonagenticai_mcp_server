@@ -11,9 +11,9 @@ use serde_json::{Map, Value, json};
 use crate::builtin::{BuiltinProvider, BuiltinTool, boxed};
 
 use super::{
-    Clients, Service, TtlCache, argument, bool_or, cached, child, child_or, element_text, enum_or,
-    html_to_text, int_or, optional_int, optional_string, remember, schema, shown_repr, success,
-    truncate, truthy,
+    Clients, Service, TtlCache, argument, bool_or, child, child_or, element_text, enum_or,
+    html_to_text, int_or, optional_int, optional_string, schema, shown_repr, success, truncate,
+    truthy,
 };
 
 /// The reference's `_pdf_cache` (`eli.py:183`): parsed consolidated PDFs, keyed by path, eight
@@ -529,7 +529,9 @@ async fn current(
         let path = pdf_path(&source_path, &meta);
         // The reference caches the parsed text by path (`eli.py:183,232-243`); its size check
         // runs only on a miss.
-        let text = match cached(&path) {
+        // Its OWN cache: the document cache beside it is the search/doc store, and a 40 MB PDF
+        // text must not evict (or be evicted by) a UOKiK document.
+        let text = match PDF_CACHE.get(&path) {
             Some(text) => text.as_str().unwrap_or_default().to_owned(),
             None => {
                 let full = client
@@ -542,7 +544,7 @@ async fn current(
                     ));
                 }
                 let text = super::pdf_full_text(full).await?;
-                remember(&path, Value::String(text.clone()));
+                PDF_CACHE.put(path.clone(), Value::String(text.clone()));
                 text
             }
         };

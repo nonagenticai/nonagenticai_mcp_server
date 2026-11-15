@@ -1672,9 +1672,9 @@ async fn eli_act_text_cuts_one_article_out_of_the_pdf() {
 #[tokio::test]
 async fn eli_act_text_caches_the_parsed_pdf_by_path() {
     let (base, stub, _locations) = local_server().await;
-    // Each stub answers once: the two metadata reads are queued twice, the PDF only once —
-    // a cache miss on the second read would therefore fail instead of passing silently.
-    for _ in 0..2 {
+    // Each stub answers once: three metadata reads are queued, the PDF only once — a cache miss
+    // on any read would therefore fail instead of passing silently.
+    for _ in 0..3 {
         stub.json(
             "GET",
             "/eli/acts/DU/1964/59/references",
@@ -1703,6 +1703,13 @@ async fn eli_act_text_caches_the_parsed_pdf_by_path() {
         .await
         .expect("second read");
     assert_eq!(first["text"], second["text"]);
+    // The PDF text lives in its OWN cache (the reference's `_pdf_cache`), not the search-document
+    // cache: emptying the latter must not force another download.
+    legal::clear_doc_cache();
+    let third = legal::eli::act_text(&clients, &args(json!({"eli": "DU/1964/59"})))
+        .await
+        .expect("third read after the document cache was emptied");
+    assert_eq!(first["text"], third["text"]);
     let fetches = stub
         .requests()
         .iter()
