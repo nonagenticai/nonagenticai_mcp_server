@@ -12,6 +12,7 @@ pub mod db;
 pub mod error;
 pub mod execution;
 pub mod external;
+pub mod grant;
 pub mod mcp;
 pub mod platform;
 pub mod routes;

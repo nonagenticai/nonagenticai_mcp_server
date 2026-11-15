@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 //! Binary entry point. `--print-openapi` writes the OpenAPI JSON to stdout and exits without
+//! reading any env or touching a database (the parity tooling runs it in a bare workspace); the
+//! operator actions `--adopt-schema` and `--grant-runtime-role` connect to exactly one database,
+//! print what they did and exit, so the image is self-sufficient for the API cutover without
+//! either Python script.
 //! reading any env or touching a database (the parity tooling runs it in a bare workspace).
 //! `--seed-platform <dir>` publishes the repository's platform toolkits and exits, the
 //! reference's `python -m src.platform.seed`.
@@ -15,14 +19,48 @@ use mcp_server_rs::config::{AuthConfig, Config};
 use mcp_server_rs::error::StartupError;
 use mcp_server_rs::platform::seed::{self as platform_seed, SeedOptions, SeedReport, SeedSettings};
 use mcp_server_rs::platform::toolkit_source::load_all;
-use mcp_server_rs::{AppState, app, db, openapi, telemetry};
+use mcp_server_rs::{AppState, app, db, grant, openapi, telemetry};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
     /// Print the OpenAPI document as JSON to stdout and exit.
-    #[arg(long)]
+    #[arg(long, group = "action")]
     print_openapi: bool,
+
+    /// Stamp the embedded migrations as applied WITHOUT running their SQL, for a database whose
+    /// schema already exists (the live one was created by alembic and has no `_sqlx_migrations`).
+    ///
+    /// Prints every migration it stamped. A version already stamped with a different checksum, a
+    /// failed row, or a stamped version this binary does not embed is refused and nothing is
+    /// written. Run it before a Rust instance of this service starts, with the old one stopped: a
+    /// concurrent migrator would race the history it writes. Reads DATABASE_MIGRATE_URL when
+    /// --url is absent; prefer it or --url over a pgbouncer address, because sqlx's migrator
+    /// holds a session-level advisory lock.
+    #[arg(long, group = "action")]
+    adopt_schema: bool,
+
+    /// Grant the catalog privileges the runtime role needs, idempotently, in one transaction.
+    ///
+    /// This is the archived service's grant_runtime_role.py: schema usage, catalog DML and
+    /// EXECUTE on the SECURITY DEFINER functions. The role must already exist. Reads
+    /// DATABASE_URL when --url is absent.
+    #[arg(long, group = "action", requires = "role")]
+    grant_runtime_role: bool,
+
+    /// The role to grant, as created: ASCII letters, digits and underscores, at most 63 bytes.
+    /// Only with --grant-runtime-role.
+    #[arg(long, value_name = "NAME", requires = "grant_runtime_role")]
+    role: Option<String>,
+
+    /// Grant the worker's execution privileges instead of the API's. Only with
+    /// --grant-runtime-role.
+    #[arg(long, requires = "grant_runtime_role")]
+    worker: bool,
+
+    /// A direct Postgres URL for the action, overriding the environment variable named above.
+    #[arg(long, value_name = "URL")]
+    url: Option<String>,
     /// Publish the platform toolkits under DIR and exit (content-addressed, idempotent).
     #[arg(long, value_name = "DIR")]
     seed_platform: Option<PathBuf>,
@@ -45,6 +83,14 @@ async fn main() -> ExitCode {
             }
         };
     }
+    // Operator actions print their own report and never start a listener or read the service's
+    // configuration: they need one URL and nothing else.
+    if cli.adopt_schema {
+        return report(adopt(&cli).await);
+    }
+    if cli.grant_runtime_role {
+        return report(grant_role(&cli).await);
+    }
     if let Some(directory) = cli.seed_platform.as_deref() {
         return seed_platform(directory).await;
     }
@@ -53,6 +99,16 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!(error = %e, "startup failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn report(outcome: Result<(), String>) -> ExitCode {
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
             ExitCode::FAILURE
         }
     }
@@ -124,6 +180,49 @@ async fn seed_platform(directory: &Path) -> ExitCode {
     }
 }
 
+/// `--adopt-schema`: one direct connection, `DATABASE_MIGRATE_URL` unless `--url` names one.
+async fn adopt(cli: &Cli) -> Result<(), String> {
+    let url = action_url("--adopt-schema", cli.url.as_deref(), grant::ADOPT_URL_ENV)?;
+    let report = grant::adopt_schema(&url)
+        .await
+        .map_err(|e| grant::redact(&e.to_string(), &url))?;
+    print!("{report}");
+    Ok(())
+}
+
+/// `--grant-runtime-role`: one connection and one transaction, `DATABASE_URL` unless `--url`.
+async fn grant_role(cli: &Cli) -> Result<(), String> {
+    let role = cli
+        .role
+        .as_deref()
+        .ok_or_else(|| "--grant-runtime-role needs --role <name>".to_owned())?;
+    let url = action_url(
+        "--grant-runtime-role",
+        cli.url.as_deref(),
+        grant::GRANT_URL_ENV,
+    )?;
+    let report = grant::grant_runtime_role(&url, role, cli.worker)
+        .await
+        .map_err(|e| grant::redact(&e.to_string(), &url))?;
+    print!("{report}");
+    Ok(())
+}
+
+/// The URL for one operator action: `--url`, else the action's environment variable. An empty
+/// value counts as unset, as it does everywhere else in this crate's configuration.
+fn action_url(
+    action: &'static str,
+    explicit: Option<&str>,
+    env_name: &'static str,
+) -> Result<String, String> {
+    if let Some(url) = explicit.map(str::trim).filter(|url| !url.is_empty()) {
+        return Ok(url.to_owned());
+    }
+    match std::env::var(env_name) {
+        Ok(url) if !url.trim().is_empty() => Ok(url.trim().to_owned()),
+        _ => Err(format!("{action} needs --url or {env_name}")),
+    }
+}
 /// The reference's per-artifact log lines, the skipped-source warnings and its summary.
 fn print_seed_report(report: &SeedReport) {
     for (key, action) in &report.actions {

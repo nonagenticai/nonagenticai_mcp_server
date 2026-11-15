@@ -33,6 +33,9 @@ tests/fixtures/phase3b/policy.json:(100\.64\.0\.1|100\.100\.100\.200|db\.interna
 # are the deny list itself — the same justification as the phase-3B entries above.
 src/sources/models.rs:(\.internal|api\.internal|auth\.internal)
 
+# Cutover lane (2026-11-15). The redaction test's sample DSN: `db.internal` is a placeholder in
+# an error string the test proves is MASKED, not an address of this estate.
+src/grant.rs:db\.internal
 # Phase builtin (2026-11-15). The web scraper's SSRF guard is a DENY list, so its literals are
 # the test: `100.64.0.0/10` is the IANA shared range, `.internal` / `.svc.cluster.local` are
 # suffix rules the reference refuses, and none of them names this estate's infrastructure.
