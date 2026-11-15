@@ -300,6 +300,14 @@ def unicode_pdf() -> bytes:
     return assemble(build)
 
 
+# Checked-in PUBLIC documents, read as-is (never rewritten here): the real-world font
+# coverage the synthetic set cannot produce. The oracle entry carries the final text only —
+# the visitor-stream gate is for the synthetic documents, where every rule is isolated.
+# `duw_act.pdf`: https://edzienniki.duw.pl/GetActPdf.ashx?year=2024&book=0&position=1
+EXTRA = [
+    "duw_act.pdf",
+]
+
 DOCUMENTS = {
     "layout.pdf": layout_pdf,
     "furniture.pdf": furniture_pdf,
@@ -318,6 +326,12 @@ def load_oracle():
     from src.builtin.legal.pdf_text import pdf_to_text  # noqa: PLC0415
 
     return pdf_to_text
+
+
+def page_count(data: bytes) -> int:
+    from pypdf import PdfReader  # noqa: PLC0415
+
+    return len(PdfReader(io.BytesIO(data)).pages)
 
 
 def visitor_stream(data: bytes) -> list[list[dict]]:
@@ -356,15 +370,27 @@ def main() -> int:
     for name, builder in DOCUMENTS.items():
         data = builder()
         rendered[name] = data
-        text = pdf_to_text(data)
         entry = {
             "sha256": hashlib.sha256(data).hexdigest(),
-            "text": text,
+            "text": pdf_to_text(data),
             "visitors": visitor_stream(data),
         }
         # The page cap's closing line, exactly as the reference appends it.
-        total = len(entry["visitors"])
-        if total > 1:
+        if len(entry["visitors"]) > 1:
+            entry["text_max2"] = pdf_to_text(data, 2)
+        oracle[name] = entry
+
+    for name in EXTRA:
+        path = OUT / name
+        if not path.exists():
+            raise SystemExit(f"missing checked-in document: {path}")
+        data = path.read_bytes()
+        entry = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "text": pdf_to_text(data),
+        }
+        # The page cap's closing line, exactly as the reference appends it.
+        if page_count(data) > 1:
             entry["text_max2"] = pdf_to_text(data, 2)
         oracle[name] = entry
 

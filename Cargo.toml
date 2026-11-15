@@ -56,6 +56,11 @@ regex = "1.12.4"
 url = "2.5.8"
 # Path-template substitution percent-encodes one mapped value (`quote(text, safe="")`).
 percent-encoding = "2.3.2"
+# The three PDF-reading legal tools reproduce the reference's pypdf text extraction; `lopdf`
+# owns the object model, stream decoding and the page tree. Pinned exactly, like its
+# neighbours: the fixture gate is byte parity with one pypdf release, and a parser change must
+# be a deliberate bump rather than a silent patch release.
+lopdf = "=0.47.0"
 # The worker's backend boundary is a trait the controller holds as `dyn Backend`; AFIT is not
 # dyn-compatible, so the object-safe form comes from this crate.
 async-trait = "0.1.89"

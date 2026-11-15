@@ -50,7 +50,11 @@ fn every_fixture_renders_the_reference_text_byte_for_byte() {
     let pdfs = oracle["pdfs"].as_object().expect("the fixture documents");
     assert!(!pdfs.is_empty(), "the fixture set is not empty");
     for (name, entry) in pdfs {
-        let visitors = entry["visitors"].as_array().expect("pages");
+        // The real-world document carries its text only: it gates the INTERPRETER (Type0
+        // fonts), while a recorded stream would bloat the fixture set.
+        let Some(visitors) = entry.get("visitors").and_then(Value::as_array) else {
+            continue;
+        };
         let pages: Vec<String> = visitors
             .iter()
             .map(|page| page_text(&calls(page)))
