@@ -3,10 +3,8 @@
 //! reading any env or touching a database (the parity tooling runs it in a bare workspace); the
 //! operator actions `--adopt-schema` and `--grant-runtime-role` connect to exactly one database,
 //! print what they did and exit, so the image is self-sufficient for the API cutover without
-//! either Python script.
-//! reading any env or touching a database (the parity tooling runs it in a bare workspace).
-//! `--seed-platform <dir>` publishes the repository's platform toolkits and exits, the
-//! reference's `python -m src.platform.seed`.
+//! either Python script. `--seed-platform <dir>` publishes the repository's platform toolkits and
+//! exits, the reference's `python -m src.platform.seed`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -31,12 +29,15 @@ struct Cli {
     /// Stamp the embedded migrations as applied WITHOUT running their SQL, for a database whose
     /// schema already exists (the live one was created by alembic and has no `_sqlx_migrations`).
     ///
-    /// Prints every migration it stamped. A version already stamped with a different checksum, a
-    /// failed row, or a stamped version this binary does not embed is refused and nothing is
-    /// written. Run it before a Rust instance of this service starts, with the old one stopped: a
-    /// concurrent migrator would race the history it writes. Reads DATABASE_MIGRATE_URL when
-    /// --url is absent; prefer it or --url over a pgbouncer address, because sqlx's migrator
-    /// holds a session-level advisory lock.
+    /// Prints every migration it stamped and every one it left pending. Only the baseline
+    /// (`0001`–`0002`) is stamped; a newer embedded migration is reported as pending and executed
+    /// by the migrator at startup instead — a per-pod-start adoption must never mark SQL applied
+    /// that has not run. A version already stamped with a different checksum, a failed row, or a
+    /// stamped version this binary does not embed is refused and nothing is written. Run it before
+    /// a Rust instance of this service starts, with the old one stopped: a concurrent migrator
+    /// would race the history it writes. Reads DATABASE_MIGRATE_URL when --url is absent; prefer
+    /// it or --url over a pgbouncer address, because sqlx's migrator holds a session-level
+    /// advisory lock.
     #[arg(long, group = "action")]
     adopt_schema: bool,
 
@@ -62,7 +63,9 @@ struct Cli {
     #[arg(long, value_name = "URL")]
     url: Option<String>,
     /// Publish the platform toolkits under DIR and exit (content-addressed, idempotent).
-    #[arg(long, value_name = "DIR")]
+    /// An action of its own: combining it with --adopt-schema or --grant-runtime-role is refused
+    /// rather than silently running only one of them.
+    #[arg(long, value_name = "DIR", group = "action")]
     seed_platform: Option<PathBuf>,
 }
 
