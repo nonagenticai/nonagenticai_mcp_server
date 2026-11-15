@@ -17,7 +17,7 @@ use mcp_server_rs::config::{AuthConfig, Config};
 use mcp_server_rs::error::StartupError;
 use mcp_server_rs::platform::seed::{self as platform_seed, SeedOptions, SeedReport, SeedSettings};
 use mcp_server_rs::platform::toolkit_source::load_all;
-use mcp_server_rs::{AppState, auth, db, grant, openapi, routes, telemetry};
+use mcp_server_rs::{AppState, db, grant, openapi, routes, telemetry};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -295,7 +295,7 @@ async fn serve() -> Result<(), StartupError> {
     // The middleware and the internal runtime are the same values `app()` would build; the
     // builder needs them too, so they are built once here and the application is assembled with
     // whichever builder runtime the flag selects.
-    let auth = auth::Auth::from_config(&auth_config)?
+    let auth = mcp_server_rs::production_auth(&auth_config, &state)?
         .with_builder(cfg.builder.enabled, cfg.platform_tenant_id);
     let internal = routes::internal::InternalRuntime::from_config(&state, &auth, &auth_config)?;
     let builder = if cfg.builder.enabled {

@@ -219,9 +219,27 @@ pub fn app(
 ) -> Result<Router, error::StartupError> {
     // One parse of the authentication settings feeds both the middleware and the state's
     // gateway application key, so the two can never disagree.
-    let auth = auth::Auth::from_config(auth_config)?;
+    let auth = production_auth(auth_config, &state)?;
     let internal = routes::internal::InternalRuntime::from_config(&state, &auth, auth_config)?;
     Ok(app_with_internal(state, auth, internal))
+}
+
+/// The authentication the BINARY serves: the configured middleware plus the database binding
+/// authority, the reference's `binding_authority` over `mcp_bindings`.
+///
+/// A binding token is resolved against the tenant's own row (the reference's
+/// `DBAuthenticationProvider`, and what makes `X-MCP-Binding` mean anything). Without this the
+/// middleware's default `UnavailableBindings` refuses every binding-authenticated call `503
+/// authority_unavailable` — measured live 2026-11-15 before this constructor existed.
+pub fn production_auth(
+    auth_config: &config::AuthConfig,
+    state: &AppState,
+) -> Result<auth::Auth, error::StartupError> {
+    Ok(
+        auth::Auth::from_config(auth_config)?.with_bindings(std::sync::Arc::new(
+            auth::PgBindingAuthority::new(state.pool.clone()),
+        )),
+    )
 }
 
 /// The application with the `/mcp/internal/*` runtime supplied explicitly (tests, and the

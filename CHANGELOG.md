@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The production app installs the database binding authority.** A caller's `X-MCP-Binding`
+  token was resolved by the middleware's default `UnavailableBindings`, so every
+  binding-authenticated `/mcp` call answered `503 authority_unavailable` — measured live
+  2026-11-15. `app()` and the binary now build `Auth` through one `production_auth`
+  constructor that reads the tenant's `mcp_bindings` row, exactly as the reference does.
+
 - **`/mcp` accepts the Host its callers use.** The transport kept rmcp's loopback-only Host
   allow-list, so every real caller — an in-cluster `Host: mcp.mcp:8033` — was refused `403`
   before any JSON-RPC handling. The reference does not restrict Host at all (FastMCP's
