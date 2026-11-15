@@ -143,6 +143,22 @@ async fn server() -> Server {
     srv
 }
 
+/// Initialise tracing once per process when `RUST_LOG` is set.
+///
+/// A handler's server-side error detail (`tracing::error!`) is otherwise dropped in tests, so a
+/// CI-only 500 arrives with no cause. CI sets `RUST_LOG=info`; a local run without it is quiet.
+pub fn init_tracing() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if std::env::var_os("RUST_LOG").is_some() {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .with_test_writer()
+                .try_init();
+        }
+    });
+}
+
 pub struct Fixture {
     pub pool: PgPool,
     admin_url: String,
@@ -152,6 +168,7 @@ pub struct Fixture {
 
 impl Fixture {
     pub async fn new() -> Self {
+        init_tracing();
         let server = server().await;
         let admin_opts = PgConnectOptions::from_str(&server.url).expect("parse database url");
         let mut admin = PgConnection::connect_with(&admin_opts)

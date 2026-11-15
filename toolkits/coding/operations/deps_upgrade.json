@@ -1,0 +1,155 @@
+{
+  "operation_id": "01a179ab-bc92-7546-bd6d-5e56d69b0faa",
+  "method": "POST",
+  "path_template": "/api/dependencies/{container_name}/upgrade",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "path",
+      "target": "container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/packages",
+      "value": {
+        "source": "input",
+        "pointer": "/packages"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/dry_run",
+      "value": {
+        "source": "input",
+        "pointer": "/dry_run"
+      },
+      "optional": true
+    },
+    {
+      "location": "body",
+      "target": "/project_path",
+      "value": {
+        "source": "literal",
+        "value": "."
+      }
+    },
+    {
+      "location": "body",
+      "target": "/timeout_seconds",
+      "value": {
+        "source": "literal",
+        "value": 240
+      }
+    },
+    {
+      "location": "body",
+      "target": "/commit",
+      "value": {
+        "source": "literal",
+        "value": false
+      }
+    },
+    {
+      "location": "body",
+      "target": "/open_pr",
+      "value": {
+        "source": "literal",
+        "value": false
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      },
+      "packages": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 128,
+              "format": "package-name",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name"
+          ]
+        },
+        "maxItems": 50,
+        "minItems": 1
+      },
+      "dry_run": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "container_name",
+      "packages"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "results": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {}
+        },
+        "maxItems": 1000
+      },
+      "exit_code": {
+        "type": "integer"
+      },
+      "dry_run": {
+        "type": "boolean"
+      },
+      "stdout": {
+        "type": "string"
+      },
+      "stderr": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "results",
+      "exit_code"
+    ]
+  },
+  "response_projection": [
+    "/results",
+    "/exit_code",
+    "/dry_run",
+    "/stdout",
+    "/stderr"
+  ],
+  "redact_fields": [],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 300,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 262144
+}

@@ -32,3 +32,8 @@ tests/fixtures/phase3b/policy.json:(100\.64\.0\.1|100\.100\.100\.200|db\.interna
 # of this estate: `api.internal` and `auth.internal` are refusal cases, and the suffix literals
 # are the deny list itself — the same justification as the phase-3B entries above.
 src/sources/models.rs:(\.internal|api\.internal|auth\.internal)
+
+# Phase 5B (2026-11-15). The internal Keycloak verifier's tests build their settings from a
+# placeholder issuer; `keycloak.internal` is a documented example host, not this estate's
+# Keycloak (which is `auth.nonagentic.ai` and appears nowhere in the tests).
+tests/auth_keycloak.rs:keycloak\.internal

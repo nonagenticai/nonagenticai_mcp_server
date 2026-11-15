@@ -1,0 +1,187 @@
+{
+  "operation_id": "01a1723c-38b0-715a-8ff3-572916eba424",
+  "method": "POST",
+  "path_template": "/api/repositories/create-pull-request",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "body",
+      "target": "/fork_owner",
+      "value": {
+        "source": "input",
+        "pointer": "/fork_owner"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/fork_repo",
+      "value": {
+        "source": "input",
+        "pointer": "/fork_repo"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/original_owner",
+      "value": {
+        "source": "input",
+        "pointer": "/original_owner"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/original_repo",
+      "value": {
+        "source": "input",
+        "pointer": "/original_repo"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/head_branch",
+      "value": {
+        "source": "input",
+        "pointer": "/head_branch"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/base_branch",
+      "value": {
+        "source": "input",
+        "pointer": "/base_branch"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/title",
+      "value": {
+        "source": "input",
+        "pointer": "/title"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/message",
+      "value": {
+        "source": "input",
+        "pointer": "/message"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/draft",
+      "value": {
+        "source": "literal",
+        "value": false
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "fork_owner": {
+        "type": "string",
+        "maxLength": 300,
+        "minLength": 1
+      },
+      "fork_repo": {
+        "type": "string",
+        "maxLength": 300,
+        "minLength": 1
+      },
+      "original_owner": {
+        "type": "string",
+        "maxLength": 300,
+        "minLength": 1
+      },
+      "original_repo": {
+        "type": "string",
+        "maxLength": 300,
+        "minLength": 1
+      },
+      "head_branch": {
+        "type": "string",
+        "maxLength": 200,
+        "format": "git-branch",
+        "minLength": 1
+      },
+      "base_branch": {
+        "type": "string",
+        "maxLength": 200,
+        "format": "git-branch",
+        "minLength": 1
+      },
+      "title": {
+        "type": "string",
+        "maxLength": 300,
+        "minLength": 1
+      },
+      "message": {
+        "type": "string",
+        "maxLength": 20000,
+        "minLength": 1
+      }
+    },
+    "required": [
+      "fork_owner",
+      "fork_repo",
+      "original_owner",
+      "original_repo",
+      "head_branch",
+      "base_branch",
+      "title",
+      "message"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "pr_status": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "pr_number": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "pr_url": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "status",
+      "pr_status"
+    ]
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 60,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422,
+    406,
+    429
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 131072
+}

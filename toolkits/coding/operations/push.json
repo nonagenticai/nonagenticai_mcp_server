@@ -1,0 +1,87 @@
+{
+  "operation_id": "01a1723c-38af-7329-b395-834a6ce21f2f",
+  "method": "POST",
+  "path_template": "/api/workspaces/{container_name}/git/push",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "path",
+      "target": "container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/branch",
+      "value": {
+        "source": "input",
+        "pointer": "/branch"
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      },
+      "branch": {
+        "type": "string",
+        "maxLength": 200,
+        "format": "git-branch",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "container_name",
+      "branch"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "branch": {
+        "type": "string",
+        "maxLength": 300
+      },
+      "commits_pushed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100000
+      },
+      "remote_url": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    },
+    "required": [
+      "branch",
+      "remote_url",
+      "commits_pushed"
+    ]
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 120,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 131072
+}

@@ -1,0 +1,91 @@
+{
+  "tool_id": "01a1914e-652b-7596-97bc-22a9f0b4bf7d",
+  "public_name": "start_fr_project",
+  "operation": "fr.start_project",
+  "effect": "writes",
+  "runtime": "fr_project",
+  "target": {
+    "kind": "fr_project",
+    "project_type": "it"
+  },
+  "description": "Start an fr project in the calling tenant's fr workspace as the agent member. Runs as a task: it moves to input_required when fr needs the start confirmed or a conveyor question answered (answer through the task's input request), and to completed once fr marks the project delivered; the result carries the delivery evidence and deliverables. Side effect: creates an fr project. Optional project_type overrides the toolkit's default type (it).",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "title"
+    ],
+    "properties": {
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      },
+      "description": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 5000
+      },
+      "problem_statement": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 5000
+      },
+      "desired_outcome": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 5000
+      },
+      "repository_url": {
+        "type": "string",
+        "format": "repo-url-https",
+        "minLength": 1,
+        "maxLength": 2048
+      },
+      "project_type": {
+        "type": "string",
+        "description": "Optional fr project type; defaults to the toolkit's type.",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    }
+  },
+  "result_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "project_type": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "phase": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "delivered_at": {
+        "type": "string"
+      },
+      "delivery_evidence": {},
+      "deliverables": {}
+    }
+  },
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 240,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 22,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

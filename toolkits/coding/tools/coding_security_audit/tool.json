@@ -1,0 +1,56 @@
+{
+  "tool_id": "01a17240-f950-7078-94e9-e5caaece4b41",
+  "public_name": "coding_security_audit",
+  "operation": "coding.security_audit",
+  "description": "Audit a workspace: asynchronous security scan (polled within a bounded budget), dependency scan, vulnerable packages and SBOM. Precondition: the workspace runs. Reads only. A degraded scan is reported as scan_degraded, never as clean. If the scan is still running it returns pending with a resume_token; call again with it.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128,
+        "format": "idempotency-key",
+        "description": "Caller-chosen key; repeating the call with the same key and arguments is safe because every step reads state before writing."
+      },
+      "resume_token": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 2048,
+        "format": "resume-token",
+        "description": "Opaque token from a pending result; pass it back unchanged with the same other arguments."
+      }
+    },
+    "required": [
+      "container_name"
+    ]
+  },
+  "effect": "read_only",
+  "allowed_operations": [
+    "workspace_status",
+    "security_async",
+    "security_result",
+    "security_quick",
+    "deps_scan",
+    "deps_vulnerable",
+    "sbom"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 32,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

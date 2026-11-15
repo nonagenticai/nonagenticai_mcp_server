@@ -89,6 +89,9 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379/
       PG_IMAGE: postgres:18
       REDIS_IMAGE: library/redis:8.10.1-alpine
+      # Test processes initialise a subscriber only when this is set: a CI-only failure then
+      # carries the server-side error line that caused it, instead of a bare 500.
+      RUST_LOG: info
     steps:
       - uses: actions/checkout@v7
 

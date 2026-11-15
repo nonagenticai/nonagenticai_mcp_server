@@ -471,6 +471,7 @@ pub async fn insert_binding(
     tools: &[EffectiveTool],
     actor: &Attribution,
 ) -> Result<(), CatalogStoreError> {
+    let spec = &micros_spec(spec);
     sqlx::query(
         "INSERT INTO public.mcp_bindings(tenant_id,binding_id,gateway_license_id,\
          credential_profile_id,token_sha256,spec,tools,enabled,expires_at,created_by,updated_by) \
@@ -502,6 +503,7 @@ pub async fn update_binding(
     tools: &[EffectiveTool],
     actor: &Attribution,
 ) -> Result<(), CatalogStoreError> {
+    let spec = &micros_spec(spec);
     sqlx::query(
         "UPDATE public.mcp_bindings SET spec=$3::jsonb,tools=$4::jsonb,\
          credential_profile_id=$5::uuid,enabled=$6,\
@@ -608,6 +610,27 @@ fn snapshot<T: serde::Serialize>(
 /// An instant as epoch microseconds, the exact integer the write path binds.
 fn instant_micros(instant: DateTime<Utc>) -> i64 {
     instant.timestamp_micros()
+}
+
+/// The same instant at microsecond precision, sub-microsecond digits removed.
+///
+/// `mcp_bindings_check` compares the stored `expires_at` column with the JSON spec's own text
+/// (`(spec->>'expires_at')::timestamptz = expires_at`). The column is bound from
+/// [`instant_micros`] (a floor); PostgreSQL's timestamptz input rounds to the nearest
+/// microsecond. On a host whose clock reports nanoseconds — Linux, so CI — those two differ by
+/// one microsecond about half the time and the row is refused; macOS reports microseconds, so
+/// the mismatch never appears locally. Truncating BEFORE both the JSON snapshot and the bound
+/// integer makes the two provably equal on any host.
+fn micros(instant: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp_micros(instant.timestamp_micros()).unwrap_or(instant)
+}
+
+/// The spec with its expiry at microsecond precision, so the JSON text and the bound column
+/// parse to the same instant (see [`micros`]).
+fn micros_spec(spec: &BindingSpec) -> BindingSpec {
+    let mut spec = spec.clone();
+    spec.expires_at = micros(spec.expires_at);
+    spec
 }
 
 fn positive(value: i64) -> Result<PositiveVersion, CatalogStoreError> {

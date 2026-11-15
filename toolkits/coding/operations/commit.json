@@ -1,0 +1,123 @@
+{
+  "operation_id": "01a1723c-38af-7329-b395-8349f2a38f4e",
+  "method": "POST",
+  "path_template": "/api/workspaces/{container_name}/git/commit",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "path",
+      "target": "container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/message",
+      "value": {
+        "source": "input",
+        "pointer": "/message"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/files",
+      "value": {
+        "source": "input",
+        "pointer": "/files"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/author_name",
+      "value": {
+        "source": "literal",
+        "value": "nonagentic coding toolkit"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/author_email",
+      "value": {
+        "source": "literal",
+        "value": "coding-toolkit@nonagentic.ai"
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      },
+      "message": {
+        "type": "string",
+        "maxLength": 2000,
+        "minLength": 1
+      },
+      "files": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 1024,
+          "format": "relative-path",
+          "minLength": 1
+        },
+        "maxItems": 100
+      }
+    },
+    "required": [
+      "container_name",
+      "message",
+      "files"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "commit_sha": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "files_committed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100000
+      },
+      "branch": {
+        "type": "string",
+        "maxLength": 300
+      }
+    },
+    "required": [
+      "commit_sha",
+      "files_committed",
+      "branch"
+    ]
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 60,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422,
+    406,
+    429
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 131072
+}

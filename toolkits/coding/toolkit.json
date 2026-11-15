@@ -1,0 +1,5 @@
+{
+  "toolkit_id": "01a1723c-3893-736b-9ccd-437b17e47989",
+  "name": "coding",
+  "description": "Repository provisioning, analysis, verified code writes, checks, security audit and pull requests through the coding gateway. Deterministic: no LLM endpoint is reachable."
+}

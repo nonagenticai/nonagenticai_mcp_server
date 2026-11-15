@@ -664,6 +664,64 @@ async fn insert_binding(fixture: &Fixture, toolkit: &ToolkitDescriptor, case: Bi
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────────────────
+/// A clock with nanosecond resolution (Linux, so CI) hands the writer digits that PostgreSQL's
+/// timestamptz input rounds away; `mcp_bindings_check` compares the stored column with the JSON
+/// spec's own text, so the writer must normalise the instant or the row is refused. macOS reports
+/// microseconds and never showed this, which is why the first failure was on CI.
+#[tokio::test]
+async fn a_sub_microsecond_expiry_is_stored_and_matches_its_spec_text() {
+    let fixture = Fixture::new().await;
+    insert_profile(&fixture).await;
+    let toolkit = seed_toolkit(&fixture, &[(TOOL_ALPHA, "alpha_tool")]).await;
+    let mut spec: BindingSpec = serde_json::from_value(json!({
+        "schema_version": 1,
+        "credential_profile_id": PROFILE,
+        "toolkits": [{"id": TOOLKIT_1, "version": 1, "tenant_id": TENANT_A}],
+        "context": {"tenant_id": TENANT_A},
+        "expires_at": FUTURE,
+        "enabled": true,
+    }))
+    .expect("binding spec");
+    spec.expires_at =
+        chrono::DateTime::from_timestamp(1_900_000_000, 123_456_789).expect("a fixed instant");
+
+    let mut tx = fixture.pool.begin().await.expect("transaction");
+    bindings::insert_binding(
+        &mut tx,
+        &authority(TENANT_A),
+        &uuid7(BINDING),
+        &authority(LICENSE),
+        &uuid7(PROFILE),
+        &bindings::digest_token("sub-microsecond"),
+        &spec,
+        &toolkit.tools,
+        &serde_json::from_value(actor_snapshot()).expect("actor"),
+    )
+    .await
+    .expect("the writer normalises the instant and the row is accepted");
+    // The selection rows the same write path creates: the access trigger refuses a binding with
+    // no members.
+    let row = bindings::get_binding(&mut tx, &authority(TENANT_A), &uuid7(BINDING), false)
+        .await
+        .expect("binding row");
+    let stored = bindings::descriptor(&row).expect("binding descriptor");
+    bindings::binding_members(&mut tx, &stored)
+        .await
+        .expect("binding members");
+    tx.commit().await.expect("commit");
+
+    let (matches,): (bool,) = sqlx::query_as(
+        "SELECT (spec->>'expires_at')::timestamptz = expires_at FROM public.mcp_bindings \
+         WHERE tenant_id = $1::uuid AND binding_id = $2::uuid",
+    )
+    .bind(TENANT_A)
+    .bind(BINDING)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("stored row");
+    assert!(matches, "the spec text and the column are the same instant");
+    fixture.finish().await;
+}
 
 #[tokio::test]
 async fn an_enabled_binding_authenticates_and_inspects() {
