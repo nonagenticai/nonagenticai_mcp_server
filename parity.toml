@@ -58,5 +58,4 @@ paths = [
   "/mcp/toolkits/import",       # phase 5B
   "/mcp/builder*",              # phase 5B
   "/mcp/internal*",             # phase 5B (the tenant-scoped mirrors of builder/sources)
-  "/api/channels/fr/events",    # phase 6
 ]

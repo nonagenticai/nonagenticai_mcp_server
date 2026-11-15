@@ -80,7 +80,8 @@ pub struct AppState {
         (name = "runs", description = "Durable execution runs"),
         (name = "services", description = "Platform service contracts"),
         (name = "operations", description = "Platform operation contracts"),
-        (name = "sources", description = "Platform tool sources")
+        (name = "sources", description = "Platform tool sources"),
+        (name = "channel", description = "fr inbound channel events")
     ),
     components(schemas(routes::tools::ValidationError))
 )]
@@ -143,6 +144,10 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::sources::rotate_source_token))
         .routes(routes!(routes::sources::disable_source))
         .routes(routes!(routes::sources::enable_source))
+        // fr's inbound channel. It authenticates by HMAC signature only, so `/mcp`'s
+        // authentication middleware passes it through by path (`auth::protect` protects
+        // `/mcp` and `/mcp/...` and nothing else) — exactly where the reference mounts it.
+        .routes(routes!(routes::fr_channel::events))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.
@@ -174,12 +179,30 @@ pub fn app(
 /// `with_state`, so it covers `/mcp` and every `/mcp/...` path — including paths no route
 /// knows yet, which the reference middleware also protects.
 pub fn app_with_auth(state: AppState, auth: auth::Auth) -> Router {
+    app_with_channel_secret(state, auth, routes::fr_channel::secret_from_env())
+}
+
+/// The same application with an explicit fr channel HMAC key.
+///
+/// The reference reads the key off `app.state.settings`; this crate's [`AppState`] carries no
+/// settings object, so it travels as a request extension inserted here, once, from
+/// `MCP_FR_CHANNEL_SECRET` (or from the caller, in tests). `POST /api/channels/fr/events` reads
+/// it and nothing else does; the route is outside `/mcp`, so `auth::protect` passes it through
+/// untouched and the signature is the only credential it accepts.
+pub fn app_with_channel_secret(
+    state: AppState,
+    auth: auth::Auth,
+    channel_secret: Option<String>,
+) -> Router {
     let (router, _) = api_router().split_for_parts();
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
     // envelope, so it is not part of the utoipa OpenAPI document.
     router
         .route_service("/mcp", mcp::service(&state))
         .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
+        .layer(axum::Extension(routes::fr_channel::ChannelSecret(
+            channel_secret,
+        )))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
