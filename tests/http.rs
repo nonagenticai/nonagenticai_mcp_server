@@ -317,6 +317,43 @@ async fn mcp_initialize_negotiates_a_protocol_version() {
     assert_eq!(rpc_payload(&body), expected, "{body}");
 }
 
+#[tokio::test]
+async fn mcp_accepts_the_in_cluster_host_its_callers_use() {
+    // The reference disables the SDK's DNS-rebinding guard by default, so a caller's Host
+    // (`mcp.mcp:8033`, the Service DNS name its clients dial) must reach the transport. rmcp's
+    // loopback-only default answered 403 here — before any JSON-RPC handling — which is the
+    // regression this test pins; `MCP_ALLOWED_HOSTS` remains an opt-in restriction.
+    let req = Request::post("/mcp")
+        .header("host", "mcp.mcp:8033")
+        .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+        .header("x-mcp-binding", BINDING_TOKEN)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "cluster-host", "version": "0"}
+                }
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let resp = authed_app().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        rpc_payload(&body)["result"]["protocolVersion"],
+        "2025-06-18"
+    );
+}
+
 // ── tools/list: the catalog projection ────────────────────────────────────────────────────
 
 fn tools_list(cursor: Option<&str>) -> serde_json::Value {
