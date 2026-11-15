@@ -48,6 +48,8 @@ fn state() -> AppState {
         platform_tenant_id: Rfc4122Uuid::parse("01900000-0000-7000-8000-00000000f001")
             .expect("static uuid"),
         catalog_page_size: 10,
+        platform: None,
+        sources: mcp_server_rs::config::SourceSettings::default(),
     }
 }
 

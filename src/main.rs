@@ -63,6 +63,25 @@ async fn serve() -> Result<(), StartupError> {
     }
     tracing::info!("migrations applied");
 
+    // The reference refuses startup when a platform pool is configured without platform
+    // authorization (`src/config.py:314`); a pool nobody may use is a misconfiguration, not a
+    // feature. The same rule holds here, before the listener exists.
+    if cfg.platform_database_url.is_some() && auth_config.platform_admin_key_file.is_none() {
+        return Err(mcp_server_rs::error::StartupError::Config(
+            mcp_server_rs::config::ConfigError::Invalid {
+                name: "MCP_PLATFORM_DATABASE_URL",
+                reason: "platform authorization requires MCP_PLATFORM_ADMIN_KEY_FILE".into(),
+            },
+        ));
+    }
+    // Same database, elevated role: opened before the listener so a bad URL refuses startup
+    // instead of 503-ing its routes later. No second migration target — the schema applied
+    // above is the schema it reads.
+    let platform = match &cfg.platform_database_url {
+        Some(url) => Some(db::connect(url).await?),
+        None => None,
+    };
+
     let listener = TcpListener::bind(cfg.bind_addr).await?;
     tracing::info!(addr = %listener.local_addr()?, "listening");
     axum::serve(
@@ -75,6 +94,8 @@ async fn serve() -> Result<(), StartupError> {
                 approved_runner_images: cfg.approved_runner_images.clone(),
                 platform_tenant_id: cfg.platform_tenant_id,
                 catalog_page_size: cfg.catalog_page_size,
+                platform,
+                sources: cfg.sources.clone(),
                 execution: cfg.execution.clone(),
             },
             &auth_config,

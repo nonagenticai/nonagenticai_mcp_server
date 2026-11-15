@@ -25,3 +25,10 @@ src/worker/sources.rs:"\.internal",
 src/worker/broker/egress.rs:"\.internal",
 tests/fixtures/phase3b/generate_policy.py:(100\.64\.0\.1|100\.100\.100\.200|db\.internal|x\.svc\.cluster\.local)
 tests/fixtures/phase3b/policy.json:(100\.64\.0\.1|100\.100\.100\.200|db\.internal|x\.svc\.cluster\.local)
+
+# Phase 5A (2026-11-15). The tool-source contract carries the reference's own tenant deny list
+# (`INTERNAL_SUFFIXES`: `.local`, `.internal`, `.svc`, `.cluster.local`, …) and its tests assert
+# that a tenant URL naming one of those suffixes is REFUSED. None of these strings is an address
+# of this estate: `api.internal` and `auth.internal` are refusal cases, and the suffix literals
+# are the deny list itself — the same justification as the phase-3B entries above.
+src/sources/models.rs:(\.internal|api\.internal|auth\.internal)

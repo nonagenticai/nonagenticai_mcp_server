@@ -149,7 +149,11 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let name = format!("mcp_routes_tools_{}_{nanos}", std::process::id());
+        // A process-wide counter disambiguates two tests that read the clock in the same
+        // tick: `SystemTime` resolution is coarser than parallel test threads need.
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("mcp_routes_tools_{}_{nanos}_{sequence}", std::process::id());
         sqlx::query(AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
             .execute(&mut admin)
             .await
@@ -182,6 +186,8 @@ impl Fixture {
                 )
                 .expect("static uuid"),
                 catalog_page_size: 10,
+                platform: None,
+                sources: mcp_server_rs::config::SourceSettings::default(),
             },
             auth(),
         )

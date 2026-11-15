@@ -200,7 +200,9 @@ impl ToolkitService {
         share: bool,
     ) -> Result<CredentialProfile, ToolkitServiceError> {
         let profile =
-            bindings::profile_row(conn, tenant, &spec.credential_profile_id, false, share).await?;
+            bindings::profile_row(conn, tenant, &spec.credential_profile_id, false, share)
+                .await?
+                .profile;
         if self.license_app_key.as_deref() != Some(profile.gateway.app_key.as_str()) {
             return Err(ToolkitServiceError::Invalid(
                 "gateway credential has wrong application",
@@ -251,6 +253,77 @@ impl ToolkitService {
             }
         }
         Ok(profile)
+    }
+
+    /// Create (no `expected`) or replace (with `expected`) a credential profile in one
+    /// transaction with its reference rows.
+    ///
+    /// The returned revision is the one the write produced, exactly as the reference's
+    /// `write_profile` reports it without re-reading the row.
+    pub async fn profile_write(
+        &self,
+        principal: &Principal,
+        profile: &CredentialProfile,
+        expected: Option<PositiveVersion>,
+    ) -> Result<(CredentialProfile, PositiveVersion), ToolkitServiceError> {
+        let actor = Self::operator(principal)?;
+        let tenant = tenant(principal)?;
+        let mut transaction = self.pool.begin().await.map_err(database)?;
+        let result = self
+            .write_profile(&mut transaction, &tenant, &actor, profile, expected)
+            .await
+            .map_err(map_profile_write)?;
+        // The deferred completeness trigger fires at COMMIT; the reference catches its
+        // `CheckViolation` around the same transaction boundary.
+        transaction
+            .commit()
+            .await
+            .map_err(database)
+            .map_err(map_profile_write)?;
+        Ok(result)
+    }
+
+    /// The reference's `write_profile`: profile create/update inside the caller's transaction.
+    pub async fn write_profile(
+        &self,
+        conn: &mut PgConnection,
+        tenant: &AuthorityId,
+        actor: &Attribution,
+        profile: &CredentialProfile,
+        expected: Option<PositiveVersion>,
+    ) -> Result<(CredentialProfile, PositiveVersion), ToolkitServiceError> {
+        if profile.tenant_id != *tenant {
+            return Err(ToolkitServiceError::Forbidden("tenant mismatch"));
+        }
+        if self.license_app_key.as_deref() != Some(profile.gateway.app_key.as_str()) {
+            return Err(ToolkitServiceError::Invalid(
+                "gateway credential must reference the MCP application",
+            ));
+        }
+        let revision = match expected {
+            None => {
+                bindings::insert_profile(conn, tenant, profile, actor).await?;
+                PositiveVersion::new(1).expect("one is a positive version")
+            }
+            Some(expected) => {
+                let row =
+                    bindings::profile_row(conn, tenant, &profile.profile_id, true, false).await?;
+                if i64::from(expected.get()) != row.revision {
+                    return Err(ToolkitServiceError::Conflict("expected revision conflict"));
+                }
+                if row.name != profile.name.as_str() {
+                    return Err(ToolkitServiceError::Invalid("profile name is immutable"));
+                }
+                bindings::update_profile(conn, tenant, profile, actor).await?;
+                PositiveVersion::new(u64::from(expected.get()) + 1).map_err(|_| {
+                    ToolkitServiceError::Store(CatalogStoreError::Corrupt("profile revision"))
+                })?
+            }
+        };
+        bindings::delete_profile_refs(conn, tenant, &profile.profile_id).await?;
+        bindings::insert_profile_refs(conn, tenant, profile).await?;
+        bindings::audit_profile(conn, tenant, actor, &profile.profile_id, revision).await?;
+        Ok((profile.clone(), revision))
     }
 
     /// Create (no `identity`) or update (with `expected`) a binding in one transaction.
@@ -531,6 +604,31 @@ fn map_binding_write(error: ToolkitServiceError) -> ToolkitServiceError {
         && database.code().as_deref() == Some("23505")
     {
         return ToolkitServiceError::Conflict("binding identity already exists");
+    }
+    error
+}
+
+/// The reference's `profile_write` mapping: a unique violation is the profile conflict, and a
+/// check violation (the deferred completeness trigger, which fires at commit) is a conflict
+/// too, exactly as the reference's ASGI handler maps `CheckViolation`.
+fn map_profile_write(error: ToolkitServiceError) -> ToolkitServiceError {
+    if let ToolkitServiceError::Store(CatalogStoreError::Database(sqlx::Error::Database(
+        database,
+    ))) = &error
+    {
+        match database.code().as_deref() {
+            Some("23505") => {
+                return ToolkitServiceError::Conflict(
+                    "credential profile identity or name already exists",
+                );
+            }
+            Some("23514") => {
+                return ToolkitServiceError::Conflict(
+                    "credential profile references are incomplete",
+                );
+            }
+            _ => {}
+        }
     }
     error
 }

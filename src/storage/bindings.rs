@@ -205,6 +205,37 @@ pub async fn audit_binding(
     revision: PositiveVersion,
     action: &'static str,
 ) -> Result<(), CatalogStoreError> {
+    audit(conn, tenant, actor, identity, revision, action).await
+}
+
+/// The reference's `audit` for a credential profile write (`credential_profile.changed`).
+pub async fn audit_profile(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    actor: &Attribution,
+    identity: &Uuid7,
+    revision: PositiveVersion,
+) -> Result<(), CatalogStoreError> {
+    audit(
+        conn,
+        tenant,
+        actor,
+        identity,
+        revision,
+        "credential_profile.changed",
+    )
+    .await
+}
+
+/// One append-only `mcp_access_events` row with no artifact version.
+async fn audit(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    actor: &Attribution,
+    identity: &Uuid7,
+    revision: PositiveVersion,
+    action: &'static str,
+) -> Result<(), CatalogStoreError> {
     sqlx::query(
         "INSERT INTO public.mcp_access_events(\
          event_id,tenant_id,subject,license_id,entity_id,revision,action,artifact_version) \
@@ -244,8 +275,19 @@ pub fn fresh_identity() -> Uuid7 {
     Uuid7::new(canonical).expect("a generated RFC 9562 UUIDv7 is canonical")
 }
 
-/// The reference's `profile_row`: one tenant-owned credential profile manifest, optionally
-/// locked for an update (`FOR UPDATE`) or an issuance read (`FOR SHARE`).
+/// One `mcp_credential_profiles` row as the profile write and validate paths read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRow {
+    /// The identity's name; the column never changes after the insert.
+    pub name: String,
+    /// The identity's revision.
+    pub revision: i64,
+    /// The stored manifest.
+    pub profile: CredentialProfile,
+}
+
+/// The reference's `profile_row`: one tenant-owned credential profile row, optionally locked
+/// for an update (`FOR UPDATE`) or an issuance read (`FOR SHARE`).
 ///
 /// A missing row is `CatalogNotFoundError("credential profile not found")`.
 pub async fn profile_row(
@@ -254,9 +296,9 @@ pub async fn profile_row(
     identity: &Uuid7,
     lock: bool,
     share: bool,
-) -> Result<CredentialProfile, CatalogStoreError> {
+) -> Result<ProfileRow, CatalogStoreError> {
     let statement = format!(
-        "SELECT manifest FROM public.mcp_credential_profiles \
+        "SELECT name, revision, manifest FROM public.mcp_credential_profiles \
          WHERE tenant_id = $1::uuid AND profile_id = $2::uuid{}",
         if lock {
             " FOR UPDATE"
@@ -273,7 +315,103 @@ pub async fn profile_row(
         .await?
         .ok_or(CatalogStoreError::NotFound("credential profile not found"))?;
     let manifest: Value = row.try_get("manifest")?;
-    serde_json::from_value(manifest).map_err(|_| CatalogStoreError::Corrupt("credential profile"))
+    Ok(ProfileRow {
+        name: row.try_get("name")?,
+        revision: row.try_get("revision")?,
+        profile: serde_json::from_value(manifest)
+            .map_err(|_| CatalogStoreError::Corrupt("credential profile"))?,
+    })
+}
+
+/// The reference's `write_profile` insert: the identity, its immutable name and revision 1.
+pub async fn insert_profile(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    profile: &CredentialProfile,
+    actor: &Attribution,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "INSERT INTO public.mcp_credential_profiles(tenant_id,profile_id,name,manifest,\
+         created_by,updated_by) VALUES ($1::uuid,$2::uuid,$3,$4::jsonb,$5,$5)",
+    )
+    .bind(tenant.as_str())
+    .bind(profile.profile_id.as_str())
+    .bind(profile.name.as_str())
+    .bind(snapshot(profile, "credential profile snapshot")?)
+    .bind(snapshot(actor, "credential profile actor snapshot")?)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The reference's `write_profile` update: the replacement manifest and the revision bump.
+pub async fn update_profile(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    profile: &CredentialProfile,
+    actor: &Attribution,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "UPDATE public.mcp_credential_profiles SET manifest=$3::jsonb,revision=revision+1,\
+         updated_by=$4,updated_at=clock_timestamp() \
+         WHERE tenant_id=$1::uuid AND profile_id=$2::uuid",
+    )
+    .bind(tenant.as_str())
+    .bind(profile.profile_id.as_str())
+    .bind(snapshot(profile, "credential profile snapshot")?)
+    .bind(snapshot(actor, "credential profile actor snapshot")?)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The reference's `write_profile` reference replacement: every stored reference row.
+pub async fn delete_profile_refs(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    identity: &Uuid7,
+) -> Result<(), CatalogStoreError> {
+    sqlx::query(
+        "DELETE FROM public.mcp_credential_refs \
+         WHERE tenant_id = $1::uuid AND profile_id = $2::uuid",
+    )
+    .bind(tenant.as_str())
+    .bind(identity.as_str())
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The reference's profile reference rows: `__gateway` plus one row per service reference.
+///
+/// A reference's `bundle` has no `mcp_credential_refs` column; the reference stores the same
+/// five columns and drops it here too.
+pub async fn insert_profile_refs(
+    conn: &mut PgConnection,
+    tenant: &AuthorityId,
+    profile: &CredentialProfile,
+) -> Result<(), CatalogStoreError> {
+    for (service, reference) in std::iter::once(("__gateway", &profile.gateway)).chain(
+        profile
+            .services
+            .iter()
+            .map(|reference| (reference.service.as_str(), reference)),
+    ) {
+        sqlx::query(
+            "INSERT INTO public.mcp_credential_refs(\
+             tenant_id,profile_id,service_key,alias,license_id,app_key) \
+             VALUES ($1::uuid,$2::uuid,$3,$4,$5::uuid,$6)",
+        )
+        .bind(tenant.as_str())
+        .bind(profile.profile_id.as_str())
+        .bind(service)
+        .bind(reference.alias.as_str())
+        .bind(reference.license_id.as_str())
+        .bind(reference.app_key.as_str())
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 /// The reference's `validate_profile` service read: one manifest per operation behind a
