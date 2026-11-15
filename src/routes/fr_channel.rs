@@ -349,10 +349,10 @@ async fn approval(pool: &PgPool, kind: &str, event: &Value) -> Result<(), sqlx::
             // fr names the project on an approval raised inside it: a run started before that
             // (its start approval carried no project) adopts the id here, so its poll can read
             // the project instead of waiting forever for the start outcome.
-            if let Some(project) = project {
-                if !run.has_project() {
-                    record(pool, run, json!({ "project_id": project })).await?;
-                }
+            if let Some(project) = project
+                && !run.has_project()
+            {
+                record(pool, run, json!({ "project_id": project })).await?;
             }
             activity(
                 pool,
@@ -379,13 +379,12 @@ async fn approval(pool: &PgPool, kind: &str, event: &Value) -> Result<(), sqlx::
     for run in &runs {
         // A tombstone, so a late approval.requested for this run is ignored.
         close_input(pool, &run.tenant_id, &run.run_id, approval_id).await?;
-        if let Some(final_status) = final_status {
-            if START_ENDINGS.contains(&final_status)
-                && run.reference_id() == Some(approval_id)
-                && !run.has_project()
-            {
-                record(pool, run, json!({ "start_outcome": final_status })).await?;
-            }
+        if let Some(final_status) = final_status
+            && START_ENDINGS.contains(&final_status)
+            && run.reference_id() == Some(approval_id)
+            && !run.has_project()
+        {
+            record(pool, run, json!({ "start_outcome": final_status })).await?;
         }
         activity(
             pool,
@@ -579,21 +578,21 @@ async fn message(pool: &PgPool, event: &Value) -> Result<(), sqlx::Error> {
         return Ok(());
     }
 
-    if matches!(kind, Some("text" | "report")) {
-        if let Some(body) = body {
-            let message: String = body.chars().take(PHASE_LIMIT).collect();
-            sqlx::query(
-                "UPDATE public.mcp_runs SET status_message = $1 \
+    if matches!(kind, Some("text" | "report"))
+        && let Some(body) = body
+    {
+        let message: String = body.chars().take(PHASE_LIMIT).collect();
+        sqlx::query(
+            "UPDATE public.mcp_runs SET status_message = $1 \
                  WHERE tenant_id = $2::uuid AND run_id = $3::uuid \
                  AND status <> ALL($4::text[])",
-            )
-            .bind(message)
-            .bind(&run.target.tenant_id)
-            .bind(&run.target.run_id)
-            .bind(terminal_statuses())
-            .execute(pool)
-            .await?;
-        }
+        )
+        .bind(message)
+        .bind(&run.target.tenant_id)
+        .bind(&run.target.run_id)
+        .bind(terminal_statuses())
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
