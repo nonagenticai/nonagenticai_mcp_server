@@ -13,13 +13,17 @@ use crate::catalog::error::CatalogError;
 use crate::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
 use crate::catalog::lifecycle::VersionStatus;
 use crate::catalog::models::{
-    Attribution, Constraint, Effect, Runtime, ToolManifest, VersionDescriptor,
+    Attribution, Constraint, Effect, ExactReference, OperationManifest, Runtime, ServiceManifest,
+    ToolManifest, VersionDescriptor,
 };
 use crate::catalog::package::{PackageFile, validate_package};
 use crate::catalog::public::{RESERVED_NAMES, output_envelope, validate_public_input};
 use crate::catalog::validation::{SchemaLimits, validate_schema};
 use crate::config::PackageLimits;
-use crate::storage::catalog::{AppendRequest, CatalogRepository, CatalogStoreError};
+use crate::storage::catalog::{
+    AppendRequest, CatalogRepository, CatalogStoreError, PlatformCatalogRepository,
+    PlatformDefinition, PlatformKind, PlatformStoreError,
+};
 
 /// A refused catalog operation: either an invalid value or a repository refusal.
 #[derive(Debug, Error)]
@@ -188,5 +192,165 @@ impl CatalogService {
             }
         }
         Ok(())
+    }
+}
+
+// ── platform authoring: operator-only, over the platform pool ───────────────────────────────
+
+/// A refused platform-authoring call: either an invalid value or a platform store refusal.
+#[derive(Debug, Error)]
+pub enum PlatformServiceError {
+    /// The reference's `ValueError` from schema or ownership validation.
+    #[error(transparent)]
+    Invalid(#[from] CatalogError),
+    /// A conflict, missing row or source refusal from the platform repository.
+    #[error(transparent)]
+    Store(#[from] PlatformStoreError),
+}
+
+impl From<CatalogStoreError> for PlatformServiceError {
+    fn from(error: CatalogStoreError) -> Self {
+        Self::Store(error.into())
+    }
+}
+
+impl From<CatalogServiceError> for PlatformServiceError {
+    fn from(error: CatalogServiceError) -> Self {
+        match error {
+            CatalogServiceError::Invalid(error) => Self::Invalid(error),
+            CatalogServiceError::Store(error) => Self::Store(error.into()),
+        }
+    }
+}
+
+/// The reference's `PlatformCatalogService`: platform contract authoring by an operator.
+///
+/// It holds the platform repository (the elevated pool) and the tenant catalog service used
+/// for the validations both authoring paths share: the closed schema walk, the ownership-read
+/// rules, and the exact-version reads. Deliberately absent from any tenant or agent dependency.
+#[derive(Debug, Clone)]
+pub struct PlatformCatalogService {
+    repository: PlatformCatalogRepository,
+    catalog: CatalogService,
+}
+
+impl PlatformCatalogService {
+    /// Bind the service to the platform repository and the catalog service.
+    pub fn new(repository: PlatformCatalogRepository, catalog: CatalogService) -> Self {
+        Self {
+            repository,
+            catalog,
+        }
+    }
+
+    /// The reference's `catalog.settings`: the bounds every schema validation uses.
+    pub fn limits(&self) -> &SchemaLimits {
+        &self.catalog.limits
+    }
+
+    /// Create the service identity at version 1, or append the next version.
+    pub async fn add_service(
+        &self,
+        manifest: &ServiceManifest,
+        actor: &Attribution,
+        expected_revision: Option<i64>,
+    ) -> Result<(), PlatformServiceError> {
+        let manifest: ServiceManifest = serde_json::to_value(manifest)
+            .ok()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .ok_or(CatalogError("invalid service manifest"))?;
+        Ok(self
+            .repository
+            .add_service(&manifest, actor, expected_revision)
+            .await?)
+    }
+
+    /// Append the next operation version after the reference's complete validation.
+    pub async fn add_operation(
+        &self,
+        manifest: &OperationManifest,
+        actor: &Attribution,
+    ) -> Result<(), PlatformServiceError> {
+        let manifest: OperationManifest = serde_json::to_value(manifest)
+            .ok()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .ok_or(CatalogError("invalid operation manifest"))?;
+        self.validate_schemas(&manifest)?;
+        let (service, _status) = self.catalog.repository.service(&manifest.service).await?;
+        if manifest.max_response_bytes > service.max_response_bytes {
+            return Err(
+                PlatformStoreError::Conflict("operation exceeds service response limit").into(),
+            );
+        }
+        self.catalog.ownership_reads(&manifest.scope_rules).await?;
+        Ok(self.repository.add_operation(&manifest, actor).await?)
+    }
+
+    /// Move one exact platform version through the lifecycle.
+    pub async fn transition(
+        &self,
+        kind: PlatformKind,
+        reference: &ExactReference,
+        status: VersionStatus,
+        actor: &Attribution,
+    ) -> Result<(), PlatformStoreError> {
+        self.repository
+            .transition(kind, reference, status, actor)
+            .await
+    }
+
+    /// One exact platform service version and its status (the reference's `catalog.repository`).
+    pub async fn service(
+        &self,
+        reference: &ExactReference,
+    ) -> Result<(ServiceManifest, VersionStatus), CatalogStoreError> {
+        self.catalog.repository.service(reference).await
+    }
+
+    /// One exact platform operation version and its status.
+    pub async fn operation(
+        &self,
+        reference: &ExactReference,
+    ) -> Result<(OperationManifest, VersionStatus), CatalogStoreError> {
+        self.catalog.repository.operation(reference).await
+    }
+
+    /// The shared ownership-read rule: every check must be an approved published read.
+    pub async fn ownership_reads(&self, rules: &[Constraint]) -> Result<(), PlatformServiceError> {
+        Ok(self.catalog.ownership_reads(rules).await?)
+    }
+
+    /// Validate an operation's input and output schemas against the configured bounds.
+    pub fn validate_schemas(&self, manifest: &OperationManifest) -> Result<(), CatalogError> {
+        validate_schema(
+            &Value::Object(manifest.input_schema.clone()),
+            &self.catalog.limits,
+        )?;
+        validate_schema(
+            &Value::Object(manifest.output_schema.clone()),
+            &self.catalog.limits,
+        )?;
+        Ok(())
+    }
+
+    /// Insert the importer's version-1 drafts in one transaction.
+    pub async fn insert_drafts(
+        &self,
+        manifests: &[OperationManifest],
+        actor: &Attribution,
+    ) -> Result<(), PlatformStoreError> {
+        self.repository
+            .insert_operation_drafts(manifests, actor)
+            .await
+    }
+
+    /// Every platform version of one kind (all statuses), ordered by identity then version.
+    pub async fn definitions(
+        &self,
+        kind: PlatformKind,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<PlatformDefinition>, PlatformStoreError> {
+        self.repository.definitions(kind, limit, offset).await
     }
 }

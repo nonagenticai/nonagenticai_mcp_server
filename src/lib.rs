@@ -12,6 +12,7 @@ pub mod execution;
 pub mod external;
 pub mod mcp;
 pub mod routes;
+pub mod sources;
 pub mod storage;
 pub mod tasks;
 pub mod telemetry;
@@ -76,7 +77,10 @@ pub struct AppState {
         (name = "toolkits", description = "Tenant toolkits"),
         (name = "bindings", description = "Tenant bindings"),
         (name = "available", description = "Live catalog projection"),
-        (name = "runs", description = "Durable execution runs")
+        (name = "runs", description = "Durable execution runs"),
+        (name = "services", description = "Platform service contracts"),
+        (name = "operations", description = "Platform operation contracts"),
+        (name = "sources", description = "Platform tool sources")
     ),
     components(schemas(routes::tools::ValidationError))
 )]
@@ -109,12 +113,36 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::bindings::update_binding))
         .routes(routes!(routes::bindings::rotate_binding))
         .routes(routes!(routes::bindings::revoke_binding))
+        .routes(routes!(routes::bindings::create_profile))
+        .routes(routes!(routes::bindings::update_profile))
+        .routes(routes!(routes::bindings::validate_profile))
         .routes(routes!(routes::available::available_tools))
         .routes(routes!(routes::available::effective_tools))
         .routes(routes!(routes::runs::submit_run))
         .routes(routes!(routes::runs::inspect_run))
         .routes(routes!(routes::runs::run_events))
         .routes(routes!(routes::runs::cancel_run))
+        .routes(routes!(routes::operations::create_service))
+        .routes(routes!(routes::operations::append_service))
+        .routes(routes!(routes::operations::list_services))
+        .routes(routes!(routes::operations::inspect_service))
+        .routes(routes!(routes::operations::validate_service))
+        .routes(routes!(routes::operations::publish_service))
+        .routes(routes!(routes::operations::disable_service))
+        .routes(routes!(routes::operations::append_operation))
+        .routes(routes!(routes::operations::import_operations))
+        .routes(routes!(routes::operations::list_operations))
+        .routes(routes!(routes::operations::inspect_operation))
+        .routes(routes!(routes::operations::validate_operation))
+        .routes(routes!(routes::operations::publish_operation))
+        .routes(routes!(routes::operations::disable_operation))
+        .routes(routes!(routes::sources::create_source))
+        .routes(routes!(routes::sources::list_sources))
+        .routes(routes!(routes::sources::get_source))
+        .routes(routes!(routes::sources::update_source))
+        .routes(routes!(routes::sources::rotate_source_token))
+        .routes(routes!(routes::sources::disable_source))
+        .routes(routes!(routes::sources::enable_source))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.

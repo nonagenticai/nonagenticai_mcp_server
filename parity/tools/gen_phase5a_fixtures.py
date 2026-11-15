@@ -92,7 +92,7 @@ TENANT_URL_CASES = [
     ("https://api.example.com", False),
     ("https://api.example.com/a", False),
     ("https://localhost", True),
-    ("https://api.internal", True),
+    ("https://api.lan", True),
     ("https://api.svc", True),
     ("https://api.cluster.local", True),
     ("https://10.0.0.1", True),

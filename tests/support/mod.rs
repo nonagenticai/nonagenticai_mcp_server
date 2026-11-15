@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
@@ -160,7 +161,15 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let name = format!("mcp_routes_available_{}_{nanos}", std::process::id());
+        // The clock alone is not enough: `SystemTime` resolution is coarser than two parallel
+        // tests need, so two databases created in the same tick would collide. A process-wide
+        // counter makes the name unique even then.
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = format!(
+            "mcp_routes_available_{}_{nanos}_{sequence}",
+            std::process::id()
+        );
         sqlx::query(AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
             .execute(&mut admin)
             .await
@@ -266,6 +275,20 @@ impl Fixture {
             },
             Some(GATEWAY_APP_KEY.to_owned()),
         )
+    }
+
+    /// A second pool to the same database, standing in for `MCP_PLATFORM_DATABASE_URL`. In a
+    /// deployment that URL names the same database under the elevated `mcp_platform` role, so
+    /// the harness uses an independent pool to the same test database.
+    pub async fn second_pool(&self) -> PgPool {
+        let options = PgConnectOptions::from_str(&self.admin_url)
+            .expect("parse admin url")
+            .database(&self.name);
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .expect("connect the platform pool")
     }
 
     pub async fn finish(self) {

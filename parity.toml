@@ -50,16 +50,13 @@ upstreams = []
 #
 #   phase 2  catalog read + MCP projection: available-tools, tools, toolkits, bindings
 #   phase 3  execution control: runs
-#   phase 5  builder, sources, services, operations, credential profiles, internal mirrors
+#   5A       sources, services, operations, credential profiles  — LANDED 2026-11-15
+#   phase 5B builder, toolkit import and the internal mirrors
 #   phase 6  the fr channel
 [openapi_diff.ignore]
 paths = [
-  "/mcp/toolkits/import",       # phase 5
-  "/mcp/builder*",              # phase 5
-  "/mcp/internal*",             # phase 5 (the tenant-scoped mirrors of builder/sources)
-  "/mcp/sources*",              # phase 5
-  "/mcp/services*",             # phase 5
-  "/mcp/operations*",           # phase 5
-  "/mcp/credential-profiles*",  # phase 5
+  "/mcp/toolkits/import",       # phase 5B
+  "/mcp/builder*",              # phase 5B
+  "/mcp/internal*",             # phase 5B (the tenant-scoped mirrors of builder/sources)
   "/api/channels/fr/events",    # phase 6
 ]

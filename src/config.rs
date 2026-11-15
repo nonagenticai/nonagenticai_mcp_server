@@ -164,10 +164,9 @@ fn split_source_hosts(value: Option<String>) -> Result<Vec<String>, ConfigError>
     let Some(value) = value else {
         return Ok(Vec::new());
     };
-    let pattern = regex::Regex::new(
-        r"^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[0-9]{1,5})?$",
-    )
-    .expect("static host pattern");
+    let pattern =
+        regex::Regex::new(r"^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[0-9]{1,5})?$")
+            .expect("static host pattern");
     let hosts: Vec<String> = value
         .split(',')
         .map(|h| h.trim().to_lowercase())
@@ -2711,6 +2710,93 @@ mod tests {
                 driver_settings(&[(name, value)]).is_err(),
                 "{name}={value} must be refused"
             );
+        }
+    }
+
+    fn source_settings(pairs: &[(&str, &str)]) -> Result<SourceSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        SourceSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn source_settings_default_to_no_key_and_no_hosts() {
+        let settings = source_settings(&[]).expect("empty settings");
+        assert_eq!(settings.secret_key, None);
+        assert!(settings.allowed_hosts.is_empty());
+        // The reference's default `platform_database_url` is unset too.
+        assert_eq!(
+            cfg(&[("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")])
+                .unwrap()
+                .platform_database_url,
+            None
+        );
+    }
+
+    #[test]
+    fn source_allowed_hosts_split_and_normalise_like_the_reference() {
+        let settings = source_settings(&[(
+            "MCP_SOURCE_ALLOWED_HOSTS",
+            " API.example.com , *.wild.example ,host.example:8443 ",
+        )])
+        .expect("valid host list");
+        assert_eq!(
+            settings.allowed_hosts,
+            vec![
+                "api.example.com".to_owned(),
+                "*.wild.example".to_owned(),
+                "host.example:8443".to_owned(),
+            ]
+        );
+        // The reference's allow-list pattern is a shape check only: `a..b` matches it (the
+        // URL guard refuses that host at registration and call time, not this list).
+        for invalid in ["http://x", "-bad.example.com", "*.", "host:port", "a b"] {
+            assert!(
+                source_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", invalid)]).is_err(),
+                "{invalid} must be refused"
+            );
+        }
+        // 256 entries are accepted; 257 are not.
+        let many = (0..256)
+            .map(|i| format!("h{i}.example.com"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(source_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", &many)]).is_ok());
+        let too_many = format!("{many},extra.example.com");
+        assert!(source_settings(&[("MCP_SOURCE_ALLOWED_HOSTS", &too_many)]).is_err());
+    }
+
+    #[test]
+    fn source_secret_key_is_a_padded_or_unpadded_base64url_32_byte_key() {
+        let padded = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let unpadded = padded.trim_end_matches('=');
+        assert_eq!(
+            source_settings(&[("MCP_SOURCE_SECRET_KEY", padded)])
+                .unwrap()
+                .secret_key,
+            Some(vec![0u8; 32])
+        );
+        assert_eq!(
+            source_settings(&[("MCP_SOURCE_SECRET_KEY", unpadded)])
+                .unwrap()
+                .secret_key,
+            Some(vec![0u8; 32])
+        );
+        for invalid in [
+            "short",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", // 31 bytes
+            "not base64url!!",
+            "",
+        ] {
+            let settings = source_settings(&[("MCP_SOURCE_SECRET_KEY", invalid)]);
+            if invalid.is_empty() {
+                // The reference treats an empty value as unset, not as a refusal.
+                assert_eq!(settings.unwrap().secret_key, None);
+            } else {
+                assert!(settings.is_err(), "{invalid} must be refused");
+            }
         }
     }
 }

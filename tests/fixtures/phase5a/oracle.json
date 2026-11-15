@@ -652,7 +652,7 @@
    "allow_path": true,
    "message": "a public https URL is required",
    "ok": false,
-   "value": "https://api.internal"
+   "value": "https://api.lan"
   },
   {
    "allow_path": true,

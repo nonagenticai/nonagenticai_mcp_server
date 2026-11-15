@@ -37,6 +37,13 @@ Rust port of the Python implementation archived at
 - **Licence and binding authentication** on every `/mcp` request: a tenant licence introspected
   at `LICENSE_INTROSPECT_URL` plus a binding token (`X-MCP-Binding`), or an operator key
   (`X-MCP-Admin-Key`) for management routes. Authentication fails closed.
+- **Platform authoring** behind the platform operator key: the tool-source registry
+  (`/mcp/sources`, with write-only tokens sealed through AES-256-GCM and a destination
+  allow-list), service and operation contract drafts (`/mcp/services`, `/mcp/operations`,
+  including the bounded OpenAPI 3.1 import), and tenant credential profiles
+  (`/mcp/credential-profiles`). These read and write through a second pool
+  (`MCP_PLATFORM_DATABASE_URL`, the same database under the elevated `mcp_platform` role) and
+  answer `503 platform_authoring_unavailable` when it is unset, as the reference does.
 - **Durable execution.** A PostgreSQL queue with fenced leases, global and per-tenant capacity,
   idempotency, cancellation, run journal, and recovery/quarantine. The `mcp-worker` binary
   claims runs, starts one hardened Kata runner pod per run (non-root, read-only root
@@ -74,6 +81,7 @@ logs, and `kube` for the worker's pod transport.
 | `src/execution/` | run domain and execution service |
 | `src/worker/` | scheduler, controller, Kata backend, credential broker, egress policy, recovery |
 | `src/routes/` | health and management REST handlers |
+| `src/sources/` | tool sources: the destination guard, the sealed token, the contracts and their repository |
 | `src/storage/` | PostgreSQL repositories |
 | `src/config.rs` | environment configuration |
 | `src/db.rs` | pool and embedded migrator |
