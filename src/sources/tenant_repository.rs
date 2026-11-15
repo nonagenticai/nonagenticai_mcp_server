@@ -20,7 +20,6 @@
 //! Nothing here logs or `Debug`-formats a token, a ciphertext or a stored spec document.
 
 use serde_json::Value;
-use sqlx::error::DatabaseError as _;
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgConnection, PgPool, Postgres, Row, Transaction};
 use thiserror::Error;

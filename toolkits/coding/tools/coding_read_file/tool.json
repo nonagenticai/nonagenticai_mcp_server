@@ -1,0 +1,56 @@
+{
+  "tool_id": "01a179ab-bd28-7247-8448-a5fc7ab140de",
+  "public_name": "coding_read_file",
+  "operation": "coding.read_file",
+  "description": "Read one file of the workspace working tree (for example pyproject.toml or uv.lock), or list a directory. Returns content, lines_total, sha256 and truncated for a file, entries for a directory. Without start/end a large file is returned as its first 400 lines; a span is at most 2000 lines (1-based, inclusive). Omit path to list the repository root. Precondition: the workspace runs. Read-only. A missing path returns precondition_failed (path_not_found).",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "format": "relative-path",
+        "description": "File or directory, relative to the repository root."
+      },
+      "start": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000000,
+        "description": "First line of a span (1-based)."
+      },
+      "end": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000000,
+        "description": "Last line of a span (inclusive)."
+      }
+    },
+    "required": [
+      "container_name"
+    ]
+  },
+  "effect": "read_only",
+  "allowed_operations": [
+    "workspace_status",
+    "read_file"
+  ],
+  "limits": {
+    "wall_seconds": 120,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 4,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

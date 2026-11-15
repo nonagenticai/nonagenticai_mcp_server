@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 //! Binary entry point. `--print-openapi` writes the OpenAPI JSON to stdout and exits without
 //! reading any env or touching a database (the parity tooling runs it in a bare workspace).
+//! `--seed-platform <dir>` publishes the repository's platform toolkits and exits, the
+//! reference's `python -m src.platform.seed`.
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -10,6 +13,8 @@ use tokio::net::TcpListener;
 // The crate's own imports stay in their own group so a rename never reorders them.
 use mcp_server_rs::config::{AuthConfig, Config};
 use mcp_server_rs::error::StartupError;
+use mcp_server_rs::platform::seed::{self as platform_seed, SeedOptions, SeedReport, SeedSettings};
+use mcp_server_rs::platform::toolkit_source::load_all;
 use mcp_server_rs::{AppState, app, db, openapi, telemetry};
 
 #[derive(Debug, Parser)]
@@ -18,6 +23,9 @@ struct Cli {
     /// Print the OpenAPI document as JSON to stdout and exit.
     #[arg(long)]
     print_openapi: bool,
+    /// Publish the platform toolkits under DIR and exit (content-addressed, idempotent).
+    #[arg(long, value_name = "DIR")]
+    seed_platform: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -37,6 +45,9 @@ async fn main() -> ExitCode {
             }
         };
     }
+    if let Some(directory) = cli.seed_platform.as_deref() {
+        return seed_platform(directory).await;
+    }
     telemetry::init_tracing();
     match serve().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -45,6 +56,88 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The reference's `python -m src.platform.seed`: migrate, then publish `directory`'s toolkits.
+///
+/// Its only configuration is `DATABASE_URL` (and `DATABASE_MIGRATE_URL` when set); everything
+/// else has the reference's default (`PLATFORM_TENANT_ID`) or an unset-means-skip meaning
+/// (`MCP_RUNNER_IMAGE_DIGEST`). The report is printed to stdout, one line per artifact.
+async fn seed_platform(directory: &Path) -> ExitCode {
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => {
+            eprintln!("error: DATABASE_URL is not set");
+            return ExitCode::FAILURE;
+        }
+    };
+    let settings = match SeedSettings::from_env() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let sources = match load_all(directory) {
+        Ok(sources) => sources,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let pool = match db::connect(&database_url).await {
+        Ok(pool) => pool,
+        Err(error) => {
+            eprintln!("platform seed failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // The serving mode migrates before the listener exists; the seed mode is the deployment's
+    // bootstrap, so it applies the same migrations through the same direct URL when given.
+    let migrated = match std::env::var("DATABASE_MIGRATE_URL") {
+        Ok(url) if !url.trim().is_empty() => match db::connect(&url).await {
+            Ok(direct) => {
+                let result = db::migrate(&direct).await;
+                direct.close().await;
+                result
+            }
+            Err(error) => {
+                eprintln!("platform seed failed: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => db::migrate(&pool).await,
+    };
+    if let Err(error) = migrated {
+        eprintln!("platform seed failed: {error}");
+        return ExitCode::FAILURE;
+    }
+    match platform_seed::seed(&pool, &settings, &sources, None, SeedOptions::default()).await {
+        Ok(report) => {
+            print_seed_report(&report);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("platform seed failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The reference's per-artifact log lines, the skipped-source warnings and its summary.
+fn print_seed_report(report: &SeedReport) {
+    for (key, action) in &report.actions {
+        if let Some((kind, name)) = key.split_once(':') {
+            println!("{kind} {name}: {}", action.as_str().unwrap_or_default());
+        }
+    }
+    for (name, alias) in &report.sources_missing {
+        println!(
+            "toolkit {name} skipped: source {} is not registered and active (POST /mcp/sources)",
+            alias.as_str().unwrap_or_default()
+        );
+    }
+    println!("{}", report.summary());
 }
 
 async fn serve() -> Result<(), StartupError> {
@@ -62,6 +155,21 @@ async fn serve() -> Result<(), StartupError> {
         None => db::migrate(&pool).await?,
     }
     tracing::info!("migrations applied");
+
+    // `MCP_BUILDER_ENABLED=true` is refused rather than half-served: the builder's routes and
+    // service are complete, but this binary's composition root still mounts the reference's
+    // disabled runtime — the service needs the broker's pinned-egress fetcher, adapter set and
+    // credential resolver, which live in the worker's settings, not the API's. A deployment
+    // that sets the flag must not silently get a 404 for every builder path. The live
+    // deployment leaves it unset (the reference's default), so this refuses nothing today.
+    if cfg.builder.enabled {
+        return Err(mcp_server_rs::error::StartupError::Config(
+            mcp_server_rs::config::ConfigError::Invalid {
+                name: "MCP_BUILDER_ENABLED",
+                reason: "the builder composition is not wired into the API binary yet".into(),
+            },
+        ));
+    }
 
     // The reference refuses startup when a platform pool is configured without platform
     // authorization (`src/config.py:314`); a pool nobody may use is a misconfiguration, not a

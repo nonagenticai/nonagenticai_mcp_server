@@ -291,7 +291,7 @@ impl From<ToolkitServiceError> for InternalError {
 /// The bounded raw body: the reference's `buffer` reads at most `MCP_MAX_MANAGEMENT_BYTES` and
 /// answers `413 request_too_large` beyond it. A newtype keeps utoipa from declaring a request
 /// body the reference's document does not have.
-struct BoundedBody(RawBody);
+pub struct BoundedBody(RawBody);
 
 impl<S: Send + Sync> FromRequest<S> for BoundedBody {
     type Rejection = InternalError;

@@ -12,6 +12,7 @@ pub mod error;
 pub mod execution;
 pub mod external;
 pub mod mcp;
+pub mod platform;
 pub mod routes;
 pub mod sources;
 pub mod storage;
@@ -82,12 +83,44 @@ pub struct AppState {
         (name = "services", description = "Platform service contracts"),
         (name = "operations", description = "Platform operation contracts"),
         (name = "sources", description = "Platform tool sources"),
-        (name = "internal", description = "Service-to-service provisioning")
+        (name = "internal", description = "Service-to-service provisioning"),
+        (name = "builder", description = "Tenant tool builder")
     ),
-    // `/mcp/internal/*` is not mounted through `api_router()`: it has its own credential
-    // surface and is merged outside the `/mcp` middleware (see [`app_with_internal`]). The
-    // path is still documented here, exactly as the reference's FastAPI app documents it.
-    paths(routes::internal::ensure_binding),
+    // `/mcp/internal/*` and the tenant builder are not mounted through `api_router()`: they
+    // have their own credential surfaces and are merged outside the `/mcp` middleware (see
+    // [`app_with_internal`]). The paths are still documented here, exactly as the reference's
+    // FastAPI app documents them. The builder's product mirror is served by the same handlers
+    // and is added to the document programmatically by
+    // [`routes::builder::mirror_product_paths`], because `utoipa` binds one path to one handler.
+    paths(
+        routes::internal::ensure_binding,
+        routes::builder::usage,
+        routes::builder::create_source,
+        routes::builder::list_sources,
+        routes::builder::get_source,
+        routes::builder::update_source,
+        routes::builder::set_secret,
+        routes::builder::disable_source,
+        routes::builder::enable_source,
+        routes::builder::fetch_spec,
+        routes::builder::spec_operations,
+        routes::builder::import_operations,
+        routes::builder::list_operations,
+        routes::builder::update_operation,
+        routes::builder::create_tool,
+        routes::builder::list_tools,
+        routes::builder::get_tool,
+        routes::builder::update_tool,
+        routes::builder::test_tool,
+        routes::builder::publish_tool,
+        routes::builder::disable_tool,
+        routes::builder::retire_tool,
+        routes::builder::get_run,
+        routes::builder::create_toolkit,
+        routes::builder::bind_toolkits,
+        routes::builder::append_toolkit,
+        routes::builder::publish_toolkit
+    ),
     components(schemas(routes::tools::ValidationError))
 )]
 struct ApiDoc;
@@ -149,11 +182,15 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::sources::rotate_source_token))
         .routes(routes!(routes::sources::disable_source))
         .routes(routes!(routes::sources::enable_source))
+        .routes(routes!(routes::toolkit_import::import_toolkit))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    let (_, spec) = api_router().split_for_parts();
+    let (_, mut spec) = api_router().split_for_parts();
+    // The builder router is mounted twice; its documented tenant paths are mirrored under the
+    // product prefix, exactly as the reference's one-router-two-mounts app documents them.
+    routes::builder::mirror_product_paths(&mut spec.paths);
     spec
 }
 
@@ -163,6 +200,11 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// invalid configuration must stop the process rather than serve a `/mcp` surface whose
 /// operator keys or authority are misconfigured (the reference service refuses startup for the
 /// same reasons). The error is returned, never panicked on.
+///
+/// The tool builder is not composed here: its settings live in [`config::Config`], which this
+/// constructor does not receive. The application therefore serves the reference's disabled
+/// builder (`404` on both mounts) until the composition root builds a [`BuilderService`] and
+/// calls [`app_with_builder`]. [`BuilderService`]: crate::builder::BuilderService
 pub fn app(
     state: AppState,
     auth_config: &config::AuthConfig,
@@ -178,14 +220,36 @@ pub fn app(
 /// binary through [`app`]).
 ///
 /// The `/mcp` auth layer is installed after the `/mcp` routes are registered and **before**
-/// the internal router is merged, so it covers `/mcp` and every `/mcp/...` path except
-/// `/mcp/internal/*`: those carry a Keycloak service JWT, which that middleware would read as a
-/// tenant licence. The internal router authenticates in its own middleware instead
-/// (`routes::internal`), exactly as the reference's `/mcp/internal/` interceptor does.
+/// the internal and builder routers are merged, so it covers `/mcp` and every `/mcp/...` path
+/// except `/mcp/internal/*` and `/mcp/builder/*`: those carry their own credentials (a Keycloak
+/// service JWT, a tenant builder licence, or both) which that middleware would read as a
+/// tenant licence. Each of those routers authenticates in its own middleware instead
+/// (`routes::internal`, `routes::builder`), exactly as the reference's `/mcp/internal/` and
+/// builder branches do.
+///
+/// The builder runtime is the reference's `install` result: [`app_with_internal`] passes the
+/// disabled one, so every builder path answers the reference's `404 not_found` until a caller
+/// supplies a runtime through [`app_with_builder`].
 pub fn app_with_internal(
     state: AppState,
     auth: auth::Auth,
     internal: routes::internal::InternalRuntime,
+) -> Router {
+    let builder = routes::builder::BuilderRuntime::disabled(&state, &auth);
+    app_with_builder(state, auth, internal, builder)
+}
+
+/// The application with an explicit builder runtime — the reference's `builder_runtime.install`
+/// (`src/asgi.py:125`), whose service is composed once at startup by the composition root.
+///
+/// `app_with_builder` takes the same `/mcp` and internal surfaces as [`app_with_internal`] and
+/// adds both builder mounts (`/mcp/builder/*` and `/mcp/internal/tenants/{tenant_id}/builder/*`)
+/// outside the `/mcp` authentication layer: each mount authenticates its own credential shape.
+pub fn app_with_builder(
+    state: AppState,
+    auth: auth::Auth,
+    internal: routes::internal::InternalRuntime,
+    builder: routes::builder::BuilderRuntime,
 ) -> Router {
     let (router, _) = api_router().split_for_parts();
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
@@ -194,6 +258,7 @@ pub fn app_with_internal(
         .route_service("/mcp", mcp::service(&state))
         .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
         .merge(routes::internal::router(std::sync::Arc::new(internal)))
+        .merge(routes::builder::router(builder))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

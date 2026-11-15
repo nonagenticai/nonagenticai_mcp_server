@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sqlx::error::DatabaseError as _;
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgConnection, PgPool, Postgres, Row, Transaction};
 use thiserror::Error;

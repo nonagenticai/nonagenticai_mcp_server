@@ -115,10 +115,6 @@ fn bounded_text<'de, D: Deserializer<'de>>(
     }
 }
 
-fn text_1_256<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
-    bounded_text(deserializer, 1, 256, "text must be 1 to 256 characters")
-}
-
 fn text_1_1024<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     bounded_text(deserializer, 1, 1024, "text must be 1 to 1024 characters")
 }

@@ -27,7 +27,6 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
-use sqlx::error::DatabaseError as _;
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Row};
 
@@ -890,7 +889,7 @@ impl BindingEnsureService {
                 version: toolkit.version,
             })
             .collect();
-        let mut binding_id = row.binding_id.clone();
+        let binding_id;
         if !resolved.is_empty() {
             profile_id = Some(
                 self.write_profile(

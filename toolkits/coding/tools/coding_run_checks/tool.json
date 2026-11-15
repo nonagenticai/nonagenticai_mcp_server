@@ -1,0 +1,76 @@
+{
+  "tool_id": "01a17240-f94f-764d-bbfe-86d26dc69ecf",
+  "public_name": "coding_run_checks",
+  "operation": "coding.run_checks",
+  "description": "Run lint, compile, tests, a quick security scan, the dependency scan and the quality gate on the workspace and return one verdict plus the HEAD sha the gate graded. Precondition: the workspace runs. Executes the project's tests inside the workspace. If time runs out it returns pending with a resume_token; call again with it.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "language": {
+        "enum": [
+          "python",
+          "go",
+          "javascript",
+          "typescript"
+        ],
+        "description": "Primary language; selects the compile check."
+      },
+      "test_path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "format": "relative-path"
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128,
+        "format": "idempotency-key",
+        "description": "Caller-chosen key; repeating the call with the same key and arguments is safe because every step reads state before writing."
+      },
+      "resume_token": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 2048,
+        "format": "resume-token",
+        "description": "Opaque token from a pending result; pass it back unchanged with the same other arguments."
+      }
+    },
+    "required": [
+      "container_name",
+      "language"
+    ]
+  },
+  "effect": "writes",
+  "allowed_operations": [
+    "workspace_status",
+    "git_status",
+    "quality_analyze_sync",
+    "exec",
+    "tests_execute",
+    "tests_execute_all",
+    "test_result",
+    "security_quick",
+    "deps_scan",
+    "quality_gate",
+    "git_diff"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 12,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "tool_id": "01a17240-f94e-7086-a2ae-1ddf6742da83",
+  "public_name": "coding_provision_repo",
+  "operation": "coding.provision_repo",
+  "description": "Provision a GitHub repository as a coding workspace: import it, wait until the workspace runs, build the code graph and read HEAD. Idempotent: a running workspace with a graph returns ok at once. Side effects: creates a workspace and its graph. If time runs out it returns pending with a resume_token; call this tool again with it.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "repo_url": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "format": "repo-url-https",
+        "description": "https://github.com/<owner>/<repo>"
+      },
+      "branch": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "git-branch"
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128,
+        "format": "idempotency-key",
+        "description": "Caller-chosen key; repeating the call with the same key and arguments is safe because every step reads state before writing."
+      },
+      "resume_token": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 2048,
+        "format": "resume-token",
+        "description": "Opaque token from a pending result; pass it back unchanged with the same other arguments."
+      }
+    },
+    "required": [
+      "container_name",
+      "repo_url",
+      "branch",
+      "idempotency_key"
+    ]
+  },
+  "effect": "writes",
+  "allowed_operations": [
+    "workspace_status",
+    "get_graph",
+    "import_repository",
+    "initialize_graph",
+    "git_diff"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 24,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

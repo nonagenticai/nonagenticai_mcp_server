@@ -1,0 +1,68 @@
+{
+  "tool_id": "01a17240-f94f-764d-bbfe-86d090c73fb2",
+  "public_name": "coding_validate_references",
+  "operation": "coding.validate_references",
+  "description": "Check that named files, functions and classes exist in the workspace. Preconditions: the workspace runs and the graph has nodes. Read-only. At most 20 references per call; a missing reference makes the verdict fail.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "references": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "file",
+                "function",
+                "class"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        }
+      }
+    },
+    "required": [
+      "container_name",
+      "references"
+    ]
+  },
+  "effect": "read_only",
+  "allowed_operations": [
+    "workspace_status",
+    "get_graph",
+    "validate_file",
+    "validate_function",
+    "validate_class"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 24,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}
