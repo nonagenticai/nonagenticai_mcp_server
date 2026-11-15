@@ -14,6 +14,7 @@ use crate::config::ConfigError;
 
 pub mod bindings;
 pub mod error;
+pub mod keycloak;
 pub mod licenses;
 pub mod management;
 pub mod pg_bindings;
@@ -23,8 +24,13 @@ pub mod time;
 pub mod uuid;
 
 pub use crate::config::AuthConfig;
+pub use crate::config::KeycloakSettings;
 pub use bindings::{Binding, BindingAuthority, UnavailableBindings};
 pub use error::AuthError;
+pub use keycloak::{
+    AuthorPrincipal, KeycloakError, KeycloakVerifier, ServiceClaims, ServicePrincipal,
+    author_principal,
+};
 pub use licenses::{HttpLicenceAuthority, LicenceAuthority, UnconfiguredLicenceAuthority};
 pub use management::ManagementAuthorizer;
 pub use pg_bindings::PgBindingAuthority;

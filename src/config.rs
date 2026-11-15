@@ -1,14 +1,18 @@
 //! Configuration from the environment. Nothing has a default port: the deployment sets
 //! `BIND_ADDR` explicitly, so the binary never guesses one.
 
+use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
+use regex::Regex;
 
 use crate::auth::uuid::Rfc4122Uuid;
+use crate::worker::broker::egress::IpNetwork;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
@@ -44,6 +48,8 @@ pub struct Config {
     pub platform_database_url: Option<String>,
     /// `MCP_SOURCE_*`: the tool-source authoring settings (sealing key and host allow-list).
     pub sources: SourceSettings,
+    /// `MCP_BUILDER_*`: the tenant tool builder's switch, quotas and spec-fetch bounds.
+    pub builder: BuilderSettings,
     /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
     /// digests a `kata_python` tool may name, e.g. `["registry.example/runner@sha256:…"]`.
     /// A tool with any other digest is refused.
@@ -82,7 +88,19 @@ impl Config {
                 reason: format!("{v:?} is not an RFC 4122 UUID"),
             })?,
         };
+        // The reference's startup rule (`config.py:350`): the reserved tenant is UUIDv7.
+        if platform_tenant_id.to_string().as_bytes().get(14) != Some(&b'7') {
+            return Err(ConfigError::Invalid {
+                name: "PLATFORM_TENANT_ID",
+                reason: "the platform tenant identity must be UUIDv7".into(),
+            });
+        }
         let catalog_page_size = u32_setting(&get, "CATALOG_PAGE_SIZE", 10, 1, 100)?;
+        let builder = BuilderSettings::from_lookup(|key| get(key))?;
+        // The reference's startup cross-check (`config.py:370-372`): a builder that is on has no
+        // way to author a draft run without the licence application key.
+        let license_app_key = get("MCP_LICENSE_APP_KEY");
+        builder.validate(license_app_key.as_deref())?;
         Ok(Self {
             database_url,
             database_migrate_url: get("DATABASE_MIGRATE_URL"),
@@ -92,6 +110,7 @@ impl Config {
             catalog_page_size,
             platform_database_url: get("MCP_PLATFORM_DATABASE_URL"),
             sources: SourceSettings::from_lookup(|key| get(key))?,
+            builder,
             approved_runner_images: json_string_list(
                 get("MCP_APPROVED_RUNNER_IMAGES"),
                 "MCP_APPROVED_RUNNER_IMAGES",
@@ -179,6 +198,207 @@ fn split_source_hosts(value: Option<String>) -> Result<Vec<String>, ConfigError>
         });
     }
     Ok(hosts)
+}
+
+/// The tenant tool builder's settings, from the reference `Settings` (`config.py:144-163`).
+///
+/// The builder is off until an operator enables it. Its quotas are per tenant and counted under
+/// a per-tenant advisory lock by the storage layer; the spec-fetch bounds are what the fetch and
+/// the cached-document store enforce. `MCP_BUILDER_ALLOWED_PORTS` and `MCP_BUILDER_DENY_CIDRS`
+/// are the egress policy's inputs (the reference's `builder_allowed_ports` / `builder_deny_cidrs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuilderSettings {
+    /// `MCP_BUILDER_ENABLED` (default false): whether the builder is served at all.
+    pub enabled: bool,
+    /// `MCP_BUILDER_MAX_SOURCES` (1 to 1000, default 20): active sources per tenant.
+    pub max_sources: i32,
+    /// `MCP_BUILDER_MAX_OPERATIONS` (1 to 10000, default 300): keyed operations per tenant.
+    pub max_operations: i32,
+    /// `MCP_BUILDER_MAX_TOOLS` (1 to 1000, default 50): non-retired tools per tenant.
+    pub max_tools: i32,
+    /// `MCP_BUILDER_MAX_TOOLKITS` (1 to 1000, default 10): toolkit identities per tenant.
+    pub max_toolkits: i32,
+    /// `MCP_BUILDER_SPEC_MAX_BYTES` (1 to 67108864, default 5 MiB): one fetched document.
+    pub spec_max_bytes: usize,
+    /// `MCP_BUILDER_SPEC_MAX_TOTAL_BYTES_PER_TENANT` (1 to 1073741824, default 25 MiB): all
+    /// cached documents of one tenant, summed over its sources.
+    pub spec_max_total_bytes_per_tenant: i64,
+    /// `MCP_BUILDER_SPEC_FETCHES_PER_HOUR` (1 to 10000, default 30): one tenant's fetches.
+    pub spec_fetches_per_hour: usize,
+    /// `MCP_BUILDER_TEST_RUNS_PER_HOUR` (1 to 10000, default 60): one tenant's draft runs.
+    pub test_runs_per_hour: u64,
+    /// `MCP_BUILDER_ALLOWED_PORTS` (comma-separated, 1 to 16 entries, default `443`): the ports
+    /// a tenant source origin may name.
+    pub allowed_ports: Vec<u16>,
+    /// `MCP_BUILDER_DENY_CIDRS` (comma-separated, at most 64, default empty): extra networks the
+    /// tenant egress must refuse beyond the non-global addresses it always refuses.
+    pub deny_cidrs: Vec<String>,
+}
+
+impl Default for BuilderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_sources: 20,
+            max_operations: 300,
+            max_tools: 50,
+            max_toolkits: 10,
+            spec_max_bytes: 5 * 1024 * 1024,
+            spec_max_total_bytes_per_tenant: 25 * 1024 * 1024,
+            spec_fetches_per_hour: 30,
+            test_runs_per_hour: 60,
+            allowed_ports: vec![443],
+            deny_cidrs: Vec::new(),
+        }
+    }
+}
+
+impl BuilderSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`BuilderSettings::from_env`]. Empty values count as unset.
+    ///
+    /// The licence cross-check needs the authentication settings, which this value does not
+    /// carry; [`BuilderSettings::validate`] applies it once they are known.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let settings = Self {
+            enabled: bool_setting(&get, "MCP_BUILDER_ENABLED", false)?,
+            max_sources: i32_setting(&get, "MCP_BUILDER_MAX_SOURCES", 20, 1, 1000)?,
+            max_operations: i32_setting(&get, "MCP_BUILDER_MAX_OPERATIONS", 300, 1, 10_000)?,
+            max_tools: i32_setting(&get, "MCP_BUILDER_MAX_TOOLS", 50, 1, 1000)?,
+            max_toolkits: i32_setting(&get, "MCP_BUILDER_MAX_TOOLKITS", 10, 1, 1000)?,
+            spec_max_bytes: usize_setting(
+                &get,
+                "MCP_BUILDER_SPEC_MAX_BYTES",
+                5 * 1024 * 1024,
+                1,
+                67_108_864,
+            )?,
+            spec_max_total_bytes_per_tenant: i64_setting(
+                &get,
+                "MCP_BUILDER_SPEC_MAX_TOTAL_BYTES_PER_TENANT",
+                25 * 1024 * 1024,
+                1,
+                1_073_741_824,
+            )?,
+            spec_fetches_per_hour: usize_setting(
+                &get,
+                "MCP_BUILDER_SPEC_FETCHES_PER_HOUR",
+                30,
+                1,
+                10_000,
+            )?,
+            test_runs_per_hour: u64_setting(&get, "MCP_BUILDER_TEST_RUNS_PER_HOUR", 60, 1, 10_000)?,
+            allowed_ports: builder_ports(get("MCP_BUILDER_ALLOWED_PORTS"))?,
+            deny_cidrs: builder_deny_cidrs(get("MCP_BUILDER_DENY_CIDRS"))?,
+        };
+        // Shape rules only: the licence cross-check needs `MCP_LICENSE_APP_KEY`, which this
+        // parser does not read (it lives with the authentication settings). `Config::from_lookup`
+        // and the composition root run that check where the key is known.
+        settings.validate_shapes()?;
+        Ok(settings)
+    }
+
+    /// The reference's startup rules: the port and deny lists are well formed, and an enabled
+    /// builder has `MCP_LICENSE_APP_KEY` (`config.py:370-372`) — a builder without licence
+    /// authentication could never admit a draft run.
+    ///
+    /// [`validate_shapes`](Self::validate_shapes) is the same rule without the cross-check, for
+    /// parsing a settings block before the authentication settings are known.
+    ///
+    /// `None` skips only the licence cross-check (see [`validate_shapes`](Self::validate_shapes));
+    /// the composition root passes the parsed application key.
+    pub fn validate(&self, license_app_key: Option<&str>) -> Result<(), ConfigError> {
+        self.validate_shapes()?;
+        if self.enabled && license_app_key.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_LICENSE_APP_KEY",
+                reason: "the tool builder requires license authentication".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The shape rules alone: the port allow-list and the deny CIDRs.
+    pub fn validate_shapes(&self) -> Result<(), ConfigError> {
+        if self.allowed_ports.is_empty()
+            || self.allowed_ports.len() > 16
+            || self.allowed_ports.contains(&0)
+        {
+            return Err(ConfigError::Invalid {
+                name: "MCP_BUILDER_ALLOWED_PORTS",
+                reason: "invalid builder port allow-list".to_owned(),
+            });
+        }
+        if self.deny_cidrs.len() > 64 {
+            return Err(ConfigError::Invalid {
+                name: "MCP_BUILDER_DENY_CIDRS",
+                reason: "too many builder deny CIDRs".to_owned(),
+            });
+        }
+        for cidr in &self.deny_cidrs {
+            if IpNetwork::parse(cidr).is_err() {
+                return Err(ConfigError::Invalid {
+                    name: "MCP_BUILDER_DENY_CIDRS",
+                    reason: "invalid builder deny CIDR".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `MCP_BUILDER_ALLOWED_PORTS` (`config.py:242-250`): comma-separated, 1 to 16 ports in
+/// `1..=65535`. An absent value is the reference's default (`443`).
+fn builder_ports(raw: Option<String>) -> Result<Vec<u16>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(vec![443]);
+    };
+    let invalid = || ConfigError::Invalid {
+        name: "MCP_BUILDER_ALLOWED_PORTS",
+        reason: "invalid builder port allow-list".to_owned(),
+    };
+    let mut ports = Vec::new();
+    for entry in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let port: u16 = entry.parse().map_err(|_| invalid())?;
+        if port == 0 {
+            return Err(invalid());
+        }
+        ports.push(port);
+    }
+    if !(1..=16).contains(&ports.len()) {
+        return Err(invalid());
+    }
+    Ok(ports)
+}
+
+/// `MCP_BUILDER_DENY_CIDRS` (`config.py:252-262`): comma-separated `ip_network(strict=False)`
+/// entries, at most 64. The network stays as written; [`crate::worker::broker::egress`] parses
+/// it again with the same host-bit masking.
+fn builder_deny_cidrs(raw: Option<String>) -> Result<Vec<String>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let cidrs: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if cidrs.len() > 64 {
+        return Err(ConfigError::Invalid {
+            name: "MCP_BUILDER_DENY_CIDRS",
+            reason: "too many builder deny CIDRs".to_owned(),
+        });
+    }
+    Ok(cidrs)
 }
 
 /// The package bounds from the reference `Settings`: how many files a submitted tool package may
@@ -1035,6 +1255,258 @@ impl MinterSettings {
     }
 }
 
+/// The default `MCP_BINDING_PRODUCTS`: which platform toolkits each product's binding pins
+/// (reference `DEFAULT_PRODUCT_TOOLKITS`, `config.py:14-18`).
+pub const DEFAULT_PRODUCT_TOOLKITS: &[(&str, &[&str])] = &[
+    ("agent", &["coding", "knowledge", "cases", "rules", "fr"]),
+    (
+        "care-bus",
+        &["care_bus_ops", "knowledge", "research", "legal"],
+    ),
+];
+
+/// The default `MCP_PRODUCT_BUNDLES`: the licences bundle each product's backend credentials
+/// are minted in (reference `DEFAULT_PRODUCT_BUNDLES`, `config.py:22`).
+pub const DEFAULT_PRODUCT_BUNDLES: &[(&str, &str)] =
+    &[("agent", "agent"), ("care-bus", "care-bus")];
+
+/// The reference's `PRODUCT_PATTERN` (`config.py:28`): the `product` a product caller names.
+const PRODUCT_PATTERN: &str = r"^[a-z][a-z0-9-]{0,47}$";
+/// The reference's `TOOLKIT_NAME_PATTERN` (`config.py:30`): a toolkit named in the product table.
+const TOOLKIT_NAME_PATTERN: &str = r"^[a-z][a-z0-9_]{0,63}$";
+/// The reference's `BUNDLE_PATTERN` (`config.py:29`): the licences bundle key a product names.
+const BUNDLE_PATTERN: &str = r"^[a-z][a-z0-9_-]{0,63}$";
+
+/// Whether `value` is a well-formed product key (reference `PRODUCT_PATTERN`).
+pub fn product_name(value: &str) -> bool {
+    static PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(PRODUCT_PATTERN).expect("product pattern is valid"));
+    PATTERN.is_match(value)
+}
+
+fn toolkit_name(value: &str) -> bool {
+    static PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(TOOLKIT_NAME_PATTERN).expect("toolkit name pattern is valid"));
+    PATTERN.is_match(value)
+}
+
+fn bundle_name(value: &str) -> bool {
+    static PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(BUNDLE_PATTERN).expect("bundle pattern is valid"));
+    PATTERN.is_match(value)
+}
+
+/// The product table `POST /mcp/internal/tenants/{t}/bindings/ensure` provisions: which
+/// platform toolkits a product's binding pins, which licences bundle its backend credentials
+/// come from, and how long the binding lives.
+///
+/// The reference `Settings.binding_products` / `product_bundles` / `binding_ensure_ttl_days`
+/// (`config.py:215-219`) plus the minter those references are established with, validated by
+/// the same startup cross-checks (`config.py:336-350`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingEnsureSettings {
+    /// `MCP_BINDING_PRODUCTS` (JSON object, default [`DEFAULT_PRODUCT_TOOLKITS`]): product →
+    /// platform toolkit names. At most 64 products, 1 to 32 distinct names each.
+    pub products: BTreeMap<String, Vec<String>>,
+    /// `MCP_PRODUCT_BUNDLES` (JSON object, default [`DEFAULT_PRODUCT_BUNDLES`]): product →
+    /// licences bundle key. Every product needs one.
+    pub bundles: BTreeMap<String, String>,
+    /// `MCP_BINDING_ENSURE_TTL_DAYS` (1 to 3650, default 365): a provisioned binding's life.
+    pub ttl_days: u64,
+    /// The `MCP_LICENCE_MINTER_*` settings backend credentials are established with.
+    pub minter: MinterSettings,
+}
+
+impl Default for BindingEnsureSettings {
+    fn default() -> Self {
+        Self {
+            products: DEFAULT_PRODUCT_TOOLKITS
+                .iter()
+                .map(|(product, toolkits)| {
+                    (
+                        (*product).to_owned(),
+                        toolkits.iter().map(|name| (*name).to_owned()).collect(),
+                    )
+                })
+                .collect(),
+            bundles: DEFAULT_PRODUCT_BUNDLES
+                .iter()
+                .map(|(product, bundle)| ((*product).to_owned(), (*bundle).to_owned()))
+                .collect(),
+            ttl_days: 365,
+            minter: MinterSettings::default(),
+        }
+    }
+}
+
+impl BindingEnsureSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`BindingEnsureSettings::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let products =
+            match get("MCP_BINDING_PRODUCTS") {
+                None => Self::default().products,
+                Some(raw) => serde_json::from_str::<BTreeMap<String, Vec<String>>>(&raw).map_err(
+                    |error| ConfigError::Invalid {
+                        name: "MCP_BINDING_PRODUCTS",
+                        reason: format!("expected a JSON object of toolkit-name lists: {error}"),
+                    },
+                )?,
+            };
+        let bundles = match get("MCP_PRODUCT_BUNDLES") {
+            None => Self::default().bundles,
+            Some(raw) => {
+                serde_json::from_str::<BTreeMap<String, String>>(&raw).map_err(|error| {
+                    ConfigError::Invalid {
+                        name: "MCP_PRODUCT_BUNDLES",
+                        reason: format!("expected a JSON object of bundle keys: {error}"),
+                    }
+                })?
+            }
+        };
+        let settings = Self {
+            products,
+            bundles,
+            ttl_days: u64_setting(&get, "MCP_BINDING_ENSURE_TTL_DAYS", 365, 1, 3_650)?,
+            minter: MinterSettings::from_lookup(|key| get(key))?,
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// The reference's startup cross-checks (`config.py:336-350`): a bounded product table of
+    /// pattern-valid, distinct toolkit names, and a licences bundle key for every product.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.products.len() > 64
+            || self.products.iter().any(|(product, toolkits)| {
+                let mut seen = HashSet::new();
+                !product_name(product)
+                    || toolkits.is_empty()
+                    || toolkits.len() > 32
+                    || !toolkits.iter().all(|name| seen.insert(name.as_str()))
+                    || toolkits.iter().any(|name| !toolkit_name(name))
+            })
+        {
+            return Err(ConfigError::Invalid {
+                name: "MCP_BINDING_PRODUCTS",
+                reason: "invalid product toolkit table".into(),
+            });
+        }
+        if self.products.keys().any(|product| {
+            !self
+                .bundles
+                .get(product)
+                .is_some_and(|bundle| bundle_name(bundle))
+        }) {
+            return Err(ConfigError::Invalid {
+                name: "MCP_PRODUCT_BUNDLES",
+                reason: "every product needs a licences bundle key".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The `/mcp/internal/*` Keycloak service-token verifier (`MCP_INTERNAL_KEYCLOAK_*`).
+///
+/// All four settings or none. All four unset ⇒ the verifier is off and every service token is
+/// refused. A *partial* configuration is also off — logged as an error, never "accept any realm
+/// token" (reference `keycloak.py:76-101`). Audience and allowed clients are comma-separated,
+/// trimmed, empty entries dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeycloakSettings {
+    /// `MCP_INTERNAL_KEYCLOAK_URL`: the Keycloak base URL, e.g. `https://auth.nonagentic.ai`.
+    pub url: String,
+    /// `MCP_INTERNAL_KEYCLOAK_REALM`: the realm whose tokens the internal routes accept.
+    pub realm: String,
+    /// `MCP_INTERNAL_KEYCLOAK_AUDIENCE`: the audiences a token's `aud` must intersect.
+    pub audiences: Vec<String>,
+    /// `MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS`: the `azp` clients that may call internal routes.
+    pub allowed_clients: Vec<String>,
+}
+
+impl KeycloakSettings {
+    /// The reference's setting names, in the order this module reports them as missing.
+    pub const REQUIRED_ENV: [&str; 4] = [
+        "MCP_INTERNAL_KEYCLOAK_URL",
+        "MCP_INTERNAL_KEYCLOAK_REALM",
+        "MCP_INTERNAL_KEYCLOAK_AUDIENCE",
+        "MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS",
+    ];
+
+    pub fn from_env() -> Result<Option<Self>, ConfigError> {
+        let get = |key: &str| std::env::var(key).ok();
+        let allow_http = bool_setting(&get, "MCP_LICENSE_ALLOW_HTTP", false)?;
+        Self::from_lookup(get, allow_http)
+    }
+
+    /// Testable core of [`KeycloakSettings::from_env`]. Empty values count as unset.
+    ///
+    /// `allow_http` is `MCP_LICENSE_ALLOW_HTTP`, the switch the reference applies to this URL
+    /// (`config.py:363`).
+    pub fn from_lookup(
+        get: impl Fn(&str) -> Option<String>,
+        allow_http: bool,
+    ) -> Result<Option<Self>, ConfigError> {
+        let get = |key: &str| get(key).filter(|value| !value.trim().is_empty());
+        let url = get("MCP_INTERNAL_KEYCLOAK_URL");
+        let realm = get("MCP_INTERNAL_KEYCLOAK_REALM");
+        let audience = get("MCP_INTERNAL_KEYCLOAK_AUDIENCE");
+        let clients = get("MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS");
+        if url.is_none() && realm.is_none() && audience.is_none() && clients.is_none() {
+            return Ok(None);
+        }
+        let mut missing = Vec::new();
+        if url.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_URL");
+        }
+        if realm.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_REALM");
+        }
+        let audiences = audience.as_deref().map(split_list).unwrap_or_default();
+        if audience.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_AUDIENCE");
+        } else if audiences.is_empty() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_AUDIENCE (empty list)");
+        }
+        let allowed_clients = clients.as_deref().map(split_list).unwrap_or_default();
+        if clients.is_none() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS");
+        } else if allowed_clients.is_empty() {
+            missing.push("MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS (empty list)");
+        }
+        if !missing.is_empty() {
+            tracing::error!(
+                "Keycloak JWT auth DISABLED: partially configured, missing {}; \
+                 every /mcp/internal request will be refused",
+                missing.join(", ")
+            );
+            return Ok(None);
+        }
+        let (url, realm) = (url.unwrap_or_default(), realm.unwrap_or_default());
+        checked_authority_url("MCP_INTERNAL_KEYCLOAK_URL", &url, allow_http)?;
+        Ok(Some(Self {
+            url,
+            realm,
+            audiences,
+            allowed_clients,
+        }))
+    }
+}
+
+/// Comma-separated list entries, trimmed, empty ones dropped (the reference's `_split`).
+fn split_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Authentication configuration for the `/mcp` surface.
 ///
 /// Env names are the reference service's `src/config.py` names: pydantic-settings with prefix
@@ -1063,6 +1535,13 @@ pub struct AuthConfig {
     pub platform_admin_key_file: Option<PathBuf>,
     /// `MCP_MAX_MANAGEMENT_BYTES`: bound on a buffered management request body.
     pub max_management_bytes: usize,
+    /// `MCP_INTERNAL_KEYCLOAK_*`: the service-token verifier for `/mcp/internal/*`.
+    /// `None` = off; a partial configuration is off as well ([`KeycloakSettings`]).
+    pub keycloak: Option<KeycloakSettings>,
+    /// `MCP_BINDING_PRODUCTS` / `MCP_PRODUCT_BUNDLES` / `MCP_BINDING_ENSURE_TTL_DAYS` and the
+    /// licence minter: what `/mcp/internal/.../bindings/ensure` provisions
+    /// ([`BindingEnsureSettings`]).
+    pub binding_ensure: BindingEnsureSettings,
 }
 
 impl Default for AuthConfig {
@@ -1078,6 +1557,8 @@ impl Default for AuthConfig {
             admin_tenant_ids: Vec::new(),
             platform_admin_key_file: None,
             max_management_bytes: 262_144,
+            keycloak: None,
+            binding_ensure: BindingEnsureSettings::default(),
         }
     }
 }
@@ -1091,10 +1572,12 @@ impl AuthConfig {
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
         let timeout_seconds = float_setting(&get, "MCP_LICENSE_TIMEOUT_SECONDS", 3.0, 0.0, 10.0)?;
+        // The reference applies the licence HTTP switch to the internal Keycloak URL too.
+        let license_allow_http = bool_setting(&get, "MCP_LICENSE_ALLOW_HTTP", false)?;
         let config = Self {
             license_introspect_url: get("LICENSE_INTROSPECT_URL"),
             license_app_key: get("MCP_LICENSE_APP_KEY"),
-            license_allow_http: bool_setting(&get, "MCP_LICENSE_ALLOW_HTTP", false)?,
+            license_allow_http,
             license_timeout: Duration::from_secs_f64(timeout_seconds),
             license_max_response_bytes: int_setting(
                 &get,
@@ -1120,6 +1603,8 @@ impl AuthConfig {
                 1,
                 1_048_576,
             )?,
+            keycloak: KeycloakSettings::from_lookup(|key| get(key), license_allow_http)?,
+            binding_ensure: BindingEnsureSettings::from_lookup(|key| get(key))?,
         };
         config.validate()?;
         Ok(config)
@@ -1135,7 +1620,27 @@ impl AuthConfig {
             });
         }
         if let Some(url) = &self.license_introspect_url {
-            checked_authority_url(url, self.license_allow_http)?;
+            checked_authority_url("LICENSE_INTROSPECT_URL", url, self.license_allow_http)?;
+        }
+        if let Some(keycloak) = &self.keycloak {
+            // Hand-built settings (tests, a supervisor) cannot skip the same rules.
+            checked_authority_url(
+                "MCP_INTERNAL_KEYCLOAK_URL",
+                &keycloak.url,
+                self.license_allow_http,
+            )?;
+            if keycloak.audiences.is_empty() {
+                return Err(ConfigError::Invalid {
+                    name: "MCP_INTERNAL_KEYCLOAK_AUDIENCE",
+                    reason: "the audience list must not be empty".into(),
+                });
+            }
+            if keycloak.allowed_clients.is_empty() {
+                return Err(ConfigError::Invalid {
+                    name: "MCP_INTERNAL_KEYCLOAK_ALLOWED_CLIENTS",
+                    reason: "the allowed-client list must not be empty".into(),
+                });
+            }
         }
         if self.admin_key_file.is_some()
             && (self.license_app_key.is_none() || self.admin_tenant_ids.is_empty())
@@ -1151,15 +1656,22 @@ impl AuthConfig {
                 reason: "platform authorization requires management authorization".into(),
             });
         }
+        // Hand-built settings (tests, a supervisor) cannot skip the reference's product-table
+        // cross-checks (`config.py:336-350`).
+        self.binding_ensure.validate()?;
         Ok(())
     }
 }
 
 /// An authority URL: HTTPS, or HTTP only when explicitly approved for an in-cluster endpoint.
 /// Credentials, query strings and fragments are refused (the reference service's `checked_url`).
-fn checked_authority_url(value: &str, allow_http: bool) -> Result<(), ConfigError> {
+fn checked_authority_url(
+    name: &'static str,
+    value: &str,
+    allow_http: bool,
+) -> Result<(), ConfigError> {
     let invalid = |reason: &str| ConfigError::Invalid {
-        name: "LICENSE_INTROSPECT_URL",
+        name,
         reason: reason.to_owned(),
     };
     let rest = if let Some(rest) = value.strip_prefix("https://") {
@@ -1474,6 +1986,63 @@ fn u64_setting(
     }
 }
 
+fn usize_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: usize,
+    minimum: usize,
+    maximum: usize,
+) -> Result<usize, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<usize>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+fn i32_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: i32,
+    minimum: i32,
+    maximum: i32,
+) -> Result<i32, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<i32>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
+fn i64_setting(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: i64,
+    minimum: i64,
+    maximum: i64,
+) -> Result<i64, ConfigError> {
+    match get(name) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<i64>() {
+            Ok(parsed) if (minimum..=maximum).contains(&parsed) => Ok(parsed),
+            _ => Err(ConfigError::Invalid {
+                name,
+                reason: format!("{value:?} is not an integer in {minimum}..={maximum}"),
+            }),
+        },
+    }
+}
+
 fn float_setting(
     get: &impl Fn(&str) -> Option<String>,
     name: &'static str,
@@ -1552,6 +2121,93 @@ mod tests {
             cfg(&[("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "nope")]),
             Err(ConfigError::Invalid { .. })
         ));
+    }
+
+    #[test]
+    fn builder_settings_take_reference_defaults_and_require_license_authentication() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let defaults = cfg(&base).unwrap().builder;
+        assert_eq!(defaults, BuilderSettings::default());
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.max_sources, 20);
+        assert_eq!(defaults.max_operations, 300);
+        assert_eq!(defaults.max_tools, 50);
+        assert_eq!(defaults.max_toolkits, 10);
+        assert_eq!(defaults.spec_max_bytes, 5 * 1024 * 1024);
+        assert_eq!(defaults.spec_max_total_bytes_per_tenant, 25 * 1024 * 1024);
+        assert_eq!(defaults.spec_fetches_per_hour, 30);
+        assert_eq!(defaults.test_runs_per_hour, 60);
+        assert_eq!(defaults.allowed_ports, vec![443]);
+        assert!(defaults.deny_cidrs.is_empty());
+
+        // The reference's cross-check (`config.py:370-372`).
+        let enabled = [
+            ("DATABASE_URL", "postgres://x"),
+            ("BIND_ADDR", "0.0.0.0:9"),
+            ("MCP_BUILDER_ENABLED", "true"),
+        ];
+        assert_eq!(
+            cfg(&enabled).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_LICENSE_APP_KEY",
+                reason: "the tool builder requires license authentication".into(),
+            }
+        );
+        let licensed = [
+            ("DATABASE_URL", "postgres://x"),
+            ("BIND_ADDR", "0.0.0.0:9"),
+            ("MCP_BUILDER_ENABLED", "true"),
+            ("MCP_LICENSE_APP_KEY", "mcp"),
+        ];
+        let settings = cfg(&licensed).unwrap().builder;
+        assert!(settings.enabled);
+        // The cross-check is re-runnable by a composition root that parsed auth separately.
+        settings.validate(Some("mcp")).expect("licensed builder");
+        assert!(settings.validate(None).is_err());
+    }
+
+    #[test]
+    fn builder_ports_and_deny_cidrs_are_bounded() {
+        let base = vec![("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let with = |name: &'static str, value: &'static str| {
+            let mut pairs = base.clone();
+            pairs.push((name, value));
+            cfg(&pairs)
+        };
+
+        assert_eq!(
+            with("MCP_BUILDER_ALLOWED_PORTS", "443, 8443")
+                .unwrap()
+                .builder
+                .allowed_ports,
+            vec![443, 8443]
+        );
+        for value in ["0", "65536", "443,8443,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"] {
+            assert!(
+                with("MCP_BUILDER_ALLOWED_PORTS", value).is_err(),
+                "MCP_BUILDER_ALLOWED_PORTS={value:?} must be refused"
+            );
+        }
+
+        assert_eq!(
+            with("MCP_BUILDER_DENY_CIDRS", "10.0.0.0/8,192.168.1.7/16")
+                .unwrap()
+                .builder
+                .deny_cidrs,
+            vec!["10.0.0.0/8".to_owned(), "192.168.1.7/16".to_owned()]
+        );
+        assert!(with("MCP_BUILDER_DENY_CIDRS", "not-a-network").is_err());
+        let too_many: Vec<String> = (0..65).map(|index| format!("10.{index}.0.0/16")).collect();
+        let too_many = too_many.join(",");
+        let mut pairs = base;
+        pairs.push(("MCP_BUILDER_DENY_CIDRS", too_many.as_str()));
+        assert_eq!(
+            cfg(&pairs).unwrap_err(),
+            ConfigError::Invalid {
+                name: "MCP_BUILDER_DENY_CIDRS",
+                reason: "too many builder deny CIDRs".into(),
+            }
+        );
     }
 
     #[test]
@@ -2798,5 +3454,122 @@ mod tests {
                 assert!(settings.is_err(), "{invalid} must be refused");
             }
         }
+    }
+
+    fn binding_settings(pairs: &[(&str, &str)]) -> Result<BindingEnsureSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        BindingEnsureSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn the_platform_tenant_must_be_uuidv7() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let with = |tenant: &'static str| {
+            let mut pairs = base.to_vec();
+            pairs.push(("PLATFORM_TENANT_ID", tenant));
+            cfg(&pairs)
+        };
+        assert!(matches!(
+            with("5f868d42-03f8-41f0-a93c-3e83070dc196"),
+            Err(ConfigError::Invalid {
+                name: "PLATFORM_TENANT_ID",
+                ..
+            })
+        ));
+        assert!(with("01900000-0000-7000-8000-00000000f001").is_ok());
+    }
+
+    #[test]
+    fn binding_ensure_defaults_are_the_reference_product_tables() {
+        let defaults = BindingEnsureSettings::default();
+        assert_eq!(
+            defaults.products["agent"],
+            vec!["coding", "knowledge", "cases", "rules", "fr"]
+        );
+        assert_eq!(
+            defaults.products["care-bus"],
+            vec!["care_bus_ops", "knowledge", "research", "legal"]
+        );
+        assert_eq!(defaults.bundles["agent"], "agent");
+        assert_eq!(defaults.bundles["care-bus"], "care-bus");
+        assert_eq!(defaults.ttl_days, 365);
+        assert_eq!(binding_settings(&[]).unwrap(), defaults);
+    }
+
+    #[test]
+    fn binding_ensure_reads_json_tables_and_the_ttl() {
+        let settings = binding_settings(&[
+            ("MCP_BINDING_PRODUCTS", r#"{"agent":["fr","cases"]}"#),
+            ("MCP_PRODUCT_BUNDLES", r#"{"agent":"agent"}"#),
+            ("MCP_BINDING_ENSURE_TTL_DAYS", "30"),
+        ])
+        .unwrap();
+        assert_eq!(settings.products["agent"], vec!["fr", "cases"]);
+        assert_eq!(settings.ttl_days, 30);
+    }
+
+    #[test]
+    fn binding_ensure_refuses_an_invalid_product_table() {
+        let bundles = ("MCP_PRODUCT_BUNDLES", r#"{"agent":"agent"}"#);
+        for products in [
+            r#"{"agent":[]}"#,
+            r#"{"Agent":["fr"]}"#,
+            r#"{"agent":["fr","fr"]}"#,
+            r#"{"agent":["fr"],"bad product":["fr"]}"#,
+            r#"["fr"]"#,
+        ] {
+            let outcome = binding_settings(&[("MCP_BINDING_PRODUCTS", products), bundles]);
+            assert!(
+                matches!(
+                    outcome,
+                    Err(ConfigError::Invalid {
+                        name: "MCP_BINDING_PRODUCTS",
+                        ..
+                    })
+                ),
+                "{products}"
+            );
+        }
+        assert!(binding_settings(&[("MCP_BINDING_ENSURE_TTL_DAYS", "0")]).is_err());
+        assert!(binding_settings(&[("MCP_BINDING_ENSURE_TTL_DAYS", "3651")]).is_err());
+    }
+
+    #[test]
+    fn binding_ensure_needs_a_bundle_for_every_product() {
+        for bundles in [r#"{"care-bus":"care-bus"}"#, r#"{"agent":"Agent"}"#] {
+            let outcome = binding_settings(&[
+                ("MCP_BINDING_PRODUCTS", r#"{"agent":["fr"]}"#),
+                ("MCP_PRODUCT_BUNDLES", bundles),
+            ]);
+            assert!(
+                matches!(
+                    outcome,
+                    Err(ConfigError::Invalid {
+                        name: "MCP_PRODUCT_BUNDLES",
+                        ..
+                    })
+                ),
+                "{bundles}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_config_revalidates_a_hand_built_product_table() {
+        let mut config = AuthConfig::default();
+        config
+            .binding_ensure
+            .products
+            .insert("Agent".to_owned(), vec!["fr".to_owned()]);
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::Invalid {
+                name: "MCP_BINDING_PRODUCTS",
+                ..
+            })
+        ));
     }
 }

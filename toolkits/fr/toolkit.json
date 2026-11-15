@@ -1,0 +1,5 @@
+{
+  "toolkit_id": "01a1914e-6406-7583-b9a6-37b1507228bc",
+  "name": "fr",
+  "description": "fr projects: start an fr project in the calling tenant's fr workspace as the agent member; completes when fr marks it delivered."
+}

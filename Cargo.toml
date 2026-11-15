@@ -80,6 +80,10 @@ rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs
 tower-http = { version = "0.7.1", features = ["trace"] }
 rmcp = { version = "3.9.0", features = ["server", "transport-streamable-http-server"] }
 sha2 = "0.11.1"
+# Keycloak service tokens (`/mcp/internal/*`): RS256 against the realm JWKS, selected by `kid`.
+# The crypto backend is aws-lc-rs — the same provider this binary installs at every start
+# (`install_crypto_provider`), so the verifier shares one provider with rustls and kube.
+jsonwebtoken = { version = "=12.0.0", default-features = false, features = ["aws_lc_rs"] }
 # `tools/list` cursors are `<base64url(json {o,f})>.<hmac_sha256 hex>`, keyed by the binding's
 # stored token digest — the reference's `hmac.digest(key, raw, "sha256")`. 0.13 is the release
 # that pairs with digest/sha2 0.11 (0.12 is digest 0.10 and will not compile against it).

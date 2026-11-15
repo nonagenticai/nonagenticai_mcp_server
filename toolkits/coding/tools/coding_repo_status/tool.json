@@ -1,0 +1,39 @@
+{
+  "tool_id": "01a17240-f94f-764d-bbfe-86ce142e16ef",
+  "public_name": "coding_repo_status",
+  "operation": "coding.repo_status",
+  "description": "Report whether a workspace is provisioned, running and indexed, its HEAD sha, branch and whether the tree is dirty. Read-only. An unknown workspace returns ok with provisioned=false and coding_provision_repo as the next tool.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      }
+    },
+    "required": [
+      "container_name"
+    ]
+  },
+  "effect": "read_only",
+  "allowed_operations": [
+    "workspace_status",
+    "get_graph",
+    "git_status",
+    "git_diff"
+  ],
+  "limits": {
+    "wall_seconds": 120,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 6,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "operation_id": "01a1723c-38af-7329-b395-834b47ba85dc",
+  "method": "POST",
+  "path_template": "/api/workspaces/{container_name}/write-file",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "path",
+      "target": "container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/file_path",
+      "value": {
+        "source": "input",
+        "pointer": "/file_path"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/content",
+      "value": {
+        "source": "input",
+        "pointer": "/content"
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      },
+      "file_path": {
+        "type": "string",
+        "maxLength": 1024,
+        "format": "relative-path",
+        "minLength": 1
+      },
+      "content": {
+        "type": "string",
+        "maxLength": 60000
+      }
+    },
+    "required": [
+      "container_name",
+      "file_path",
+      "content"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "maxLength": 1024
+      }
+    }
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 30,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422,
+    406,
+    429
+  ],
+  "pagination_limit": 10,
+  "max_response_bytes": 131072
+}

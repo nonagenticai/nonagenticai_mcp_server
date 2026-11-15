@@ -45,6 +45,10 @@ COPY --from=build /out/worker /usr/local/bin/mcp-worker
 # The external driver binary (n8n and fr runtimes). Same posture: the deployment overrides the
 # entrypoint, and nothing else in the image changes.
 COPY --from=build /out/external-driver /usr/local/bin/mcp-external-driver
+# The platform catalog content `--seed-platform` reads at deploy. It is the repository's
+# `toolkits/` tree, byte-identical to the archive's: the seed is content-addressed, so any
+# change here republishes the platform tenant's catalog.
+COPY --from=build /src/toolkits /app/toolkits
 # No port is baked in: BIND_ADDR (host:port) and DATABASE_URL are required at runtime and are
 # supplied by the deployment (which also maps the Service port).
 ENV RUST_LOG=info

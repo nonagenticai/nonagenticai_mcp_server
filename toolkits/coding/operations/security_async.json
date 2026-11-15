@@ -1,0 +1,68 @@
+{
+  "operation_id": "01a1723c-38af-7329-b395-8355d0fd6923",
+  "method": "POST",
+  "path_template": "/api/security/scan/{container_name}/async",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "path",
+      "target": "container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "",
+      "value": {
+        "source": "literal",
+        "value": {}
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "container_name"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "required": [
+      "task_id"
+    ]
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [],
+  "effect": "read_only",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 30,
+  "expected_error_statuses": [
+    400,
+    404,
+    422
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 131072
+}

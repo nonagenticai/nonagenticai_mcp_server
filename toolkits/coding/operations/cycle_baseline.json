@@ -1,0 +1,61 @@
+{
+  "operation_id": "01a1723c-38af-7329-b395-834ce5b29e1e",
+  "method": "POST",
+  "path_template": "/api/analysis/architecture/cycle-check/{container_name}",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "path",
+      "target": "container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "",
+      "value": {
+        "source": "literal",
+        "value": {}
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "container_name"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 120,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 131072
+}

@@ -5,6 +5,8 @@
 //! there is no row-level security and no session variable, exactly as the reference.
 
 pub mod bindings;
+pub mod bindings_ensure;
+pub mod builder;
 pub mod catalog;
 pub mod executions;
 pub mod run_activity;

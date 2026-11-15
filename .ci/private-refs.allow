@@ -36,3 +36,7 @@ src/sources/models.rs:(\.internal|api\.internal|auth\.internal)
 # Cutover lane (2026-11-15). The redaction test's sample DSN: `db.internal` is a placeholder in
 # an error string the test proves is MASKED, not an address of this estate.
 src/grant.rs:db\.internal
+# Phase 5B (2026-11-15). The internal Keycloak verifier's tests build their settings from a
+# placeholder issuer; `keycloak.internal` is a documented example host, not this estate's
+# Keycloak (which is `auth.nonagentic.ai` and appears nowhere in the tests).
+tests/auth_keycloak.rs:keycloak\.internal
