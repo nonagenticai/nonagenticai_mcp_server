@@ -1,0 +1,1286 @@
+{
+ "conversion": {
+  "fields": {
+   "context_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+   },
+   "description": "Find an item",
+   "effect": "read_only",
+   "entrypoint": "tool:main",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+   },
+   "operation": "item.find",
+   "public_name": "find_item",
+   "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "checks": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "name": {
+         "maxLength": 64,
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "pass",
+          "fail",
+          "degraded",
+          "error"
+         ]
+        },
+        "summary": {
+         "maxLength": 500,
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "status",
+        "summary"
+       ],
+       "type": "object"
+      },
+      "maxItems": 64,
+      "type": "array"
+     },
+     "data": {},
+     "error": {
+      "additionalProperties": false,
+      "properties": {
+       "message": {
+        "maxLength": 500,
+        "type": "string"
+       },
+       "retryable": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "message",
+       "retryable"
+      ],
+      "type": "object"
+     },
+     "next": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "arguments": {
+         "type": "object"
+        },
+        "reason": {
+         "maxLength": 500,
+         "type": "string"
+        },
+        "tool": {
+         "maxLength": 64,
+         "type": "string"
+        }
+       },
+       "required": [
+        "tool"
+       ],
+       "type": "object"
+      },
+      "maxItems": 8,
+      "type": "array"
+     },
+     "reason": {
+      "maxLength": 64,
+      "type": "string"
+     },
+     "resume_token": {
+      "maxLength": 2048,
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "precondition_failed",
+       "check_failed",
+       "pending",
+       "backend_error"
+      ]
+     },
+     "verdict": {
+      "enum": [
+       "pass",
+       "fail",
+       "degraded"
+      ]
+     }
+    },
+    "required": [
+     "status",
+     "checks",
+     "next"
+    ],
+    "type": "object"
+   }
+  },
+  "input_files": [
+   {
+    "content": "async def main(inputs, ctx):\n    return {}\n",
+    "path": "tool.py"
+   }
+  ],
+  "key_prefix": "crm",
+  "operations": [
+   {
+    "manifest": {
+     "effect": "read_only",
+     "empty_response": false,
+     "expected_error_statuses": [
+      404
+     ],
+     "header_fields": [
+      "x_trace"
+     ],
+     "idempotency": "none",
+     "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+       "item_id": {
+        "type": "string"
+       },
+       "verbose": {
+        "type": "boolean"
+       },
+       "x_trace": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "item_id"
+      ],
+      "type": "object"
+     },
+     "mappings": [
+      {
+       "location": "path",
+       "optional": false,
+       "target": "item_id",
+       "value": {
+        "pointer": "/item_id",
+        "source": "input"
+       }
+      },
+      {
+       "location": "query",
+       "optional": true,
+       "target": "verbose",
+       "value": {
+        "pointer": "/verbose",
+        "source": "input"
+       }
+      },
+      {
+       "location": "header",
+       "optional": true,
+       "target": "x_trace",
+       "value": {
+        "pointer": "/x_trace",
+        "source": "input"
+       }
+      }
+     ],
+     "max_response_bytes": 262144,
+     "max_retries": 0,
+     "method": "GET",
+     "operation_id": "01900000-0000-7000-8000-000000000001",
+     "output_schema": {
+      "$defs": {
+       "Item": {
+        "properties": {
+         "id": {
+          "type": "integer"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "name",
+         "id"
+        ],
+        "type": "object"
+       }
+      },
+      "$ref": "#/$defs/Item"
+     },
+     "pagination_limit": 10,
+     "path_template": "/items/{item_id}",
+     "query_fields": [
+      "verbose"
+     ],
+     "redact_fields": [],
+     "response_projection": [
+      ""
+     ],
+     "schema_version": 1,
+     "scope_rules": [],
+     "service": {
+      "id": "01900000-0000-7000-8000-0000000000aa",
+      "version": 1
+     },
+     "timeout_seconds": 5,
+     "version": 1
+    },
+    "method": "GET",
+    "op_key": "read_item",
+    "operation_id": "readItem",
+    "path": "/items/{itemId}",
+    "summary": "Read"
+   },
+   {
+    "manifest": {
+     "effect": "writes",
+     "empty_response": false,
+     "expected_error_statuses": [],
+     "header_fields": [],
+     "idempotency": "none",
+     "input_schema": {
+      "$defs": {
+       "Item": {
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "secret": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "name"
+        ],
+        "type": "object"
+       }
+      },
+      "additionalProperties": false,
+      "properties": {
+       "body": {
+        "$ref": "#/$defs/Item"
+       }
+      },
+      "required": [
+       "body"
+      ],
+      "type": "object"
+     },
+     "mappings": [
+      {
+       "location": "body",
+       "optional": false,
+       "target": "",
+       "value": {
+        "pointer": "/body",
+        "source": "input"
+       }
+      }
+     ],
+     "max_response_bytes": 262144,
+     "max_retries": 0,
+     "method": "POST",
+     "operation_id": "01900000-0000-7000-8000-000000000002",
+     "output_schema": {
+      "$defs": {
+       "Item": {
+        "properties": {
+         "id": {
+          "type": "integer"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "name",
+         "id"
+        ],
+        "type": "object"
+       }
+      },
+      "$ref": "#/$defs/Item"
+     },
+     "pagination_limit": 10,
+     "path_template": "/items",
+     "query_fields": [],
+     "redact_fields": [],
+     "response_projection": [
+      ""
+     ],
+     "schema_version": 1,
+     "scope_rules": [],
+     "service": {
+      "id": "01900000-0000-7000-8000-0000000000aa",
+      "version": 1
+     },
+     "timeout_seconds": 10,
+     "version": 1
+    },
+    "method": "POST",
+    "op_key": "make_item",
+    "operation_id": "makeItem",
+    "path": "/items",
+    "summary": ""
+   }
+  ],
+  "overrides": {
+   "readItem": {
+    "expected_error_statuses": [
+     404
+    ],
+    "timeout_seconds": 5
+   }
+  },
+  "package": {
+   "digest": "8708e43ad9d4edbedec4a81dc8f0163e499be7a4179ac3915faa2d443de16800",
+   "files": [
+    {
+     "bytes": 10796,
+     "path": "kit.py",
+     "sha256": "cb3dc8579aebe3ff6bd1fbaa7805b49b42e0b2a0fd0953eeb35735d9d1ee6fcf"
+    },
+    {
+     "bytes": 214,
+     "path": "ops.py",
+     "sha256": "3fd31e1a2528915ad344ff1a8a11dc7351eba7ee6b4543875032fcabcb01d371"
+    },
+    {
+     "bytes": 43,
+     "path": "tool.py",
+     "sha256": "09b91091f0169a8fe136604a03b2a0f2eeadd33e84fc014b1b60f05a50a24d83"
+    }
+   ]
+  },
+  "selection": [
+   "readItem",
+   "makeItem"
+  ],
+  "service": {
+   "id": "01900000-0000-7000-8000-0000000000aa",
+   "version": 1
+  },
+  "tool": {
+   "description": "Find an item",
+   "effect": "read_only",
+   "entrypoint": "tool:main",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+   },
+   "operation": "item.find",
+   "public_name": "find_item",
+   "runner_image_digest": "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "tenant_id": "00000000-0000-0000-8000-000000000001",
+   "tool_id": "01900000-0000-7000-8000-000000000009",
+   "version": 1
+  },
+  "tool_manifest": {
+   "allowed_operations": [
+    {
+     "id": "01900000-0000-7000-8000-000000000001",
+     "version": 1
+    },
+    {
+     "id": "01900000-0000-7000-8000-000000000002",
+     "version": 1
+    }
+   ],
+   "context_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+   },
+   "description": "Find an item",
+   "effect": "read_only",
+   "entrypoint": "tool:main",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+   },
+   "limits": {
+    "api_calls": 10,
+    "cpu_millicores": 250,
+    "frame_bytes": 65536,
+    "memory_mi": 256,
+    "output_bytes": 262144,
+    "queue_seconds": 60,
+    "wall_seconds": 60
+   },
+   "operation": "item.find",
+   "operation_constraints": [],
+   "package_sha256": "8708e43ad9d4edbedec4a81dc8f0163e499be7a4179ac3915faa2d443de16800",
+   "public_name": "find_item",
+   "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "checks": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "name": {
+         "maxLength": 64,
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "pass",
+          "fail",
+          "degraded",
+          "error"
+         ]
+        },
+        "summary": {
+         "maxLength": 500,
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "status",
+        "summary"
+       ],
+       "type": "object"
+      },
+      "maxItems": 64,
+      "type": "array"
+     },
+     "data": {},
+     "error": {
+      "additionalProperties": false,
+      "properties": {
+       "message": {
+        "maxLength": 500,
+        "type": "string"
+       },
+       "retryable": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "message",
+       "retryable"
+      ],
+      "type": "object"
+     },
+     "next": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "arguments": {
+         "type": "object"
+        },
+        "reason": {
+         "maxLength": 500,
+         "type": "string"
+        },
+        "tool": {
+         "maxLength": 64,
+         "type": "string"
+        }
+       },
+       "required": [
+        "tool"
+       ],
+       "type": "object"
+      },
+      "maxItems": 8,
+      "type": "array"
+     },
+     "reason": {
+      "maxLength": 64,
+      "type": "string"
+     },
+     "resume_token": {
+      "maxLength": 2048,
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "precondition_failed",
+       "check_failed",
+       "pending",
+       "backend_error"
+      ]
+     },
+     "verdict": {
+      "enum": [
+       "pass",
+       "fail",
+       "degraded"
+      ]
+     }
+    },
+    "required": [
+     "status",
+     "checks",
+     "next"
+    ],
+    "type": "object"
+   },
+   "runner_image_digest": "registry.example/runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "runtime": "kata_python",
+   "schema_version": 1,
+   "target": null,
+   "tenant_id": "00000000-0000-0000-8000-000000000001",
+   "tool_id": "01900000-0000-7000-8000-000000000009",
+   "version": 1
+  }
+ },
+ "document": {
+  "components": {
+   "parameters": {
+    "Trace": {
+     "in": "header",
+     "name": "x-trace",
+     "schema": {
+      "type": "string"
+     }
+    }
+   },
+   "schemas": {
+    "Item": {
+     "properties": {
+      "id": {
+       "readOnly": true,
+       "type": "integer"
+      },
+      "name": {
+       "examples": [
+        "x"
+       ],
+       "pattern": "^a",
+       "type": "string"
+      },
+      "secret": {
+       "type": "string",
+       "writeOnly": true
+      }
+     },
+     "required": [
+      "name",
+      "id"
+     ],
+     "type": "object"
+    },
+    "Node": {
+     "properties": {
+      "next": {
+       "$ref": "#/components/schemas/Node"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "info": {
+   "title": "Items",
+   "version": "2"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+   "/api/ai/chat": {
+    "get": {
+     "operationId": "chat",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "/bad": {
+    "get": 5
+   },
+   "/broken": {
+    "get": {
+     "operationId": "broken"
+    }
+   },
+   "/c": {
+    "get": {
+     "operationId": "cookie",
+     "parameters": [
+      {
+       "in": "cookie",
+       "name": "s",
+       "schema": {
+        "type": "string"
+       }
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "/ext": {
+    "get": {
+     "operationId": "ext",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "http://x/y#/z"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "/form": {
+    "post": {
+     "operationId": "form",
+     "requestBody": {
+      "content": {
+       "multipart/form-data": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "/h": {
+    "get": {
+     "operationId": "hdr",
+     "parameters": [
+      {
+       "in": "header",
+       "name": "Authorization",
+       "required": true,
+       "schema": {
+        "type": "string"
+       }
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "/items": {
+    "post": {
+     "operationId": "makeItem",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Item"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "201": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/Item"
+         }
+        }
+       }
+      }
+     }
+    },
+    "put": {
+     "operationId": "optBody",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "type": "object"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "/items/{itemId}": {
+    "delete": {
+     "operationId": "dropItem",
+     "responses": {
+      "204": {
+       "description": "gone"
+      }
+     }
+    },
+    "get": {
+     "operationId": "readItem",
+     "parameters": [
+      {
+       "in": "query",
+       "name": "verbose",
+       "schema": {
+        "type": "boolean"
+       }
+      },
+      {
+       "in": "header",
+       "name": "X-Tenant-ID",
+       "schema": {
+        "type": "string"
+       }
+      },
+      {
+       "$ref": "#/components/parameters/Trace"
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/Item"
+         }
+        }
+       }
+      },
+      "422": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "type": "object"
+         }
+        }
+       }
+      }
+     },
+     "summary": "Read"
+    },
+    "parameters": [
+     {
+      "in": "path",
+      "name": "itemId",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ]
+   },
+   "/options": {
+    "options": {
+     "operationId": "optionsOp",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "/skip": "nope",
+   "/tree": {
+    "get": {
+     "operationId": "tree",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/Node"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "kit_source": {
+  "sha256": "cb3dc8579aebe3ff6bd1fbaa7805b49b42e0b2a0fd0953eeb35735d9d1ee6fcf",
+  "text": "\"\"\"Shared helpers for platform toolkit scripts. Standard library only.\n\nCopied into every tool package as ``kit.py`` next to the generated ``ops.py``\n(``OPS = {key: [operation_uuid, version]}``). A tool is one deterministic script:\n``async def main(inputs, ctx)`` returning the result envelope\n\n    {status: ok|precondition_failed|check_failed|pending|backend_error,\n     data, checks[{name, status, summary}], verdict, next[], reason?, error?, resume_token?}\n\nThe envelope invariants mirror src/toolkit_contract/envelope.py: a precondition_failed carries a\nreason and the tool that fixes it, a pending carries a resume token and the tool to call with it,\na check_failed has a failing check, and an ok never hides one.\n\"\"\"\n\nimport asyncio\nimport base64\nimport hashlib\nimport json\nimport re\nimport time\n\nSUMMARY_MAX = 500\nTOKEN_MAX = 2048\nTOKEN_MAX_AGE = 3600\nTOKEN_STATE_MAX = 1500\n_IDENT = re.compile(r\"[a-z][a-z0-9_]{0,63}\")\n\nOK = \"ok\"\nPRECONDITION_FAILED = \"precondition_failed\"\nCHECK_FAILED = \"check_failed\"\nPENDING = \"pending\"\nBACKEND_ERROR = \"backend_error\"\n\nPASS = \"pass\"\nFAIL = \"fail\"\nDEGRADED = \"degraded\"\nERROR = \"error\"\n\n\ndef clip(text, limit=SUMMARY_MAX):\n    text = str(text)\n    return text if len(text) <= limit else text[: limit - 3] + \"...\"\n\n\n# --- checks and envelope ---------------------------------------------------------------------\n\n\ndef check(name, status, summary=\"\"):\n    if not _IDENT.fullmatch(name) or status not in (PASS, FAIL, DEGRADED, ERROR):\n        raise ValueError(\"invalid check\")\n    return {\"name\": name, \"status\": status, \"summary\": clip(summary)}\n\n\ndef verdict(checks):\n    \"\"\"Any fail or error -> fail; else any degraded -> degraded; else pass; None without checks.\"\"\"\n    if not checks:\n        return None\n    statuses = {c[\"status\"] for c in checks}\n    if statuses & {FAIL, ERROR}:\n        return FAIL\n    return DEGRADED if DEGRADED in statuses else PASS\n\n\ndef step(tool, reason=\"\", arguments=None):\n    if not _IDENT.fullmatch(tool):\n        raise ValueError(\"invalid tool name\")\n    out = {\"tool\": tool, \"reason\": clip(reason)}\n    if arguments is not None:\n        out[\"arguments\"] = arguments\n    return out\n\n\ndef envelope(status, *, data=None, checks=(), next_steps=(), reason=None, error=None, token=None):\n    checks = list(checks)\n    names = [c[\"name\"] for c in checks]\n    if len(set(names)) != len(names) or len(checks) > 64 or len(next_steps) > 8:\n        raise ValueError(\"invalid envelope\")\n    failing = verdict(checks) == FAIL\n    if status == OK and failing:\n        raise ValueError(\"ok result cannot carry a failing check\")\n    if status == CHECK_FAILED and not failing:\n        raise ValueError(\"check_failed requires a failing check\")\n    if status == PRECONDITION_FAILED and (reason is None or not next_steps):\n        raise ValueError(\"precondition_failed requires reason and next\")\n    if status == PENDING and (token is None or not next_steps):\n        raise ValueError(\"pending requires resume_token and next\")\n    if status == BACKEND_ERROR and error is None:\n        raise ValueError(\"backend_error requires error\")\n    if (token is not None) != (status == PENDING):\n        raise ValueError(\"resume_token is only valid on pending\")\n    if (reason is not None) != (status == PRECONDITION_FAILED):\n        raise ValueError(\"reason is only valid on precondition_failed\")\n    if (error is not None) != (status == BACKEND_ERROR):\n        raise ValueError(\"error is only valid on backend_error\")\n    out = {\"status\": status, \"checks\": checks, \"next\": list(next_steps)}\n    if data is not None:\n        out[\"data\"] = data\n    if checks:\n        out[\"verdict\"] = verdict(checks)\n    if reason is not None:\n        if not _IDENT.fullmatch(reason):\n            raise ValueError(\"invalid reason\")\n        out[\"reason\"] = reason\n    if error is not None:\n        out[\"error\"] = error\n    if token is not None:\n        out[\"resume_token\"] = token\n    return out\n\n\ndef completed(data=None, checks=(), next_steps=()):\n    \"\"\"ok, or check_failed when the checks' verdict is fail.\"\"\"\n    status = CHECK_FAILED if verdict(checks) == FAIL else OK\n    return envelope(status, data=data, checks=checks, next_steps=next_steps)\n\n\ndef precondition_failed(reason, next_steps, checks=(), data=None):\n    return envelope(\n        PRECONDITION_FAILED, reason=reason, next_steps=next_steps, checks=checks, data=data\n    )\n\n\ndef pending(token, next_steps, data=None, checks=()):\n    return envelope(PENDING, token=token, next_steps=next_steps, data=data, checks=checks)\n\n\ndef backend_error(message, retryable=False, checks=(), data=None):\n    error = {\"message\": clip(message) or \"backend error\", \"retryable\": bool(retryable)}\n    return envelope(BACKEND_ERROR, error=error, checks=checks, data=data)\n\n\n# --- time budget -----------------------------------------------------------------------------\n\n\nclass Budget:\n    \"\"\"A deadline inside the run's wall clock, minus a safety margin.\"\"\"\n\n    def __init__(self, wall_seconds, margin=20.0, clock=None):\n        self._clock = clock or time.monotonic\n        self._end = self._clock() + max(0.0, wall_seconds - margin)\n\n    def remaining(self):\n        return self._end - self._clock()\n\n    def allows(self, seconds):\n        return self.remaining() >= seconds\n\n\nasync def poll(fetch, done, budget, *, interval=3.0, reserve=0.0, attempts=20, sleep=None):\n    \"\"\"Fetch until ``done(value)``; returns (value, finished).\n\n    Never sleeps past ``budget.remaining() - reserve`` and makes at most ``attempts`` fetches, so\n    the caller can bound its API-call count. ``finished`` is False on timeout (a pending result,\n    never a silent failure).\n    \"\"\"\n    value = None\n    for attempt in range(attempts):\n        value = await fetch()\n        if done(value):\n            return value, True\n        room = budget.remaining() - reserve\n        if attempt + 1 >= attempts or room <= interval:\n            return value, False\n        await (sleep or asyncio.sleep)(interval)\n    return value, False\n\n\n# --- backend calls ---------------------------------------------------------------------------\n\n\nclass Abort(Exception):  # noqa: N818 - control flow carrying a finished envelope\n    \"\"\"Stop the tool with a finished envelope.\"\"\"\n\n    def __init__(self, result):\n        super().__init__(\"abort\")\n        self.result = result\n\n\ndef _ops():\n    import ops  # generated beside this file\n\n    return ops.OPS\n\n\nasync def call(ctx, key, args, idempotency_key=None):\n    \"\"\"Call one operation; returns (status, body).\n\n    2xx -> (200, body). A status the operation declared in expected_error_statuses -> (status,\n    body). Anything else the runner raises (RuntimeError \"api_call_denied\") propagates.\n    \"\"\"\n    operation = _ops()[key][0]\n    try:\n        return 200, await ctx.api.call(operation, args, idempotency_key=idempotency_key)\n    except Exception as exc:  # noqa: BLE001 - duck-typed: runner.sdk.ApiStatusError\n        if type(exc).__name__ == \"ApiStatusError\":\n            return exc.status, exc.body\n        raise\n\n\ndef describe(status, body):\n    \"\"\"A short, value-free summary of an unexpected HTTP status for the caller.\"\"\"\n    detail = \"\"\n    if isinstance(body, dict):\n        for field in (\"message\", \"detail\", \"error\", \"error_code\"):\n            value = body.get(field)\n            if isinstance(value, str) and value:\n                detail = value\n                break\n    return clip(f\"HTTP {status}\" + (f\": {detail}\" if detail else \"\"), 300)\n\n\nasync def call_ok(ctx, key, args, *, what=None, retryable=False, checks=()):\n    \"\"\"Like call() but any non-2xx ends the tool with a backend_error.\"\"\"\n    status, body = await call(ctx, key, args)\n    if status != 200:\n        raise Abort(backend_error(f\"{what or key}: {describe(status, body)}\", retryable, checks))\n    return body\n\n\nasync def guarded(coro):\n    \"\"\"Run a tool body; turn aborts and denied calls into envelopes.\"\"\"\n    try:\n        return await coro\n    except Abort as stop:\n        return stop.result\n    except RuntimeError as exc:\n        if str(exc) != \"api_call_denied\":\n            raise\n        return backend_error(\n            \"a gateway call failed or was denied; a write may or may not have applied, \"\n            \"read the state back with coding_repo_status before retrying\",\n            retryable=False,\n        )\n\n\n# --- resume tokens ---------------------------------------------------------------------------\n# Unsigned base64url JSON {v, tool, iat, state}; the state holds only ids the caller could pass\n# anyway, and each one is re-read through the tenant-scoped broker. The checksum after the dot\n# only catches truncation or corruption (the token format needs two dot-separated parts).\n\n\ndef _b64(data):\n    return base64.urlsafe_b64encode(data).rstrip(b\"=\").decode(\"ascii\")\n\n\ndef _unb64(text):\n    return base64.urlsafe_b64decode(text + \"=\" * (-len(text) % 4))\n\n\ndef _crc(body):\n    return _b64(hashlib.sha256(body.encode(\"ascii\")).digest()[:6])\n\n\ndef encode_token(tool, state, now=None):\n    payload = {\n        \"v\": 1,\n        \"tool\": tool,\n        \"iat\": int(time.time() if now is None else now),\n        \"state\": state,\n    }\n    raw = json.dumps(payload, separators=(\",\", \":\"), sort_keys=True).encode(\"utf-8\")\n    if len(raw) > TOKEN_STATE_MAX:\n        raise ValueError(\"resume state too large\")\n    body = _b64(raw)\n    token = f\"{body}.{_crc(body)}\"\n    if len(token) > TOKEN_MAX:\n        raise ValueError(\"resume state too large\")\n    return token\n\n\ndef decode_token(token, tool, now=None):\n    \"\"\"Return the state or raise ValueError (malformed, wrong tool, expired, too large).\"\"\"\n    if not isinstance(token, str) or len(token) > TOKEN_MAX or token.count(\".\") != 1:\n        raise ValueError(\"malformed resume_token\")\n    body, crc = token.split(\".\")\n    if crc != _crc(body):\n        raise ValueError(\"malformed resume_token\")\n    try:\n        payload = json.loads(_unb64(body))\n    except ValueError:\n        raise ValueError(\"malformed resume_token\") from None\n    if not isinstance(payload, dict) or payload.get(\"v\") != 1:\n        raise ValueError(\"unsupported resume_token version\")\n    if payload.get(\"tool\") != tool:\n        raise ValueError(\"resume_token belongs to another tool\")\n    issued = payload.get(\"iat\")\n    current = time.time() if now is None else now\n    if type(issued) is not int or not 0 <= current - issued <= TOKEN_MAX_AGE:\n        raise ValueError(\"resume_token expired\")\n    state = payload.get(\"state\")\n    if not isinstance(state, dict):\n        raise ValueError(\"malformed resume_token\")\n    return state\n\n\ndef bad_token(message, tool):\n    \"\"\"The envelope for a rejected resume token: nothing was attempted.\"\"\"\n    return precondition_failed(\n        \"invalid_resume_token\",\n        [step(tool, clip(message, 200) + \"; call again without resume_token\")],\n    )\n"
+ },
+ "operations": [
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": "chat",
+   "path": "/api/ai/chat",
+   "reason": "blocked by the LLM endpoint deny list (llm)",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": null,
+   "path": "/bad",
+   "reason": "invalid operation",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": "broken",
+   "path": "/broken",
+   "reason": "no responses declared",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": "cookie",
+   "path": "/c",
+   "reason": "cookie parameters are not supported",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": "ext",
+   "path": "/ext",
+   "reason": "external $ref is not supported",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "POST",
+   "operationId": "form",
+   "path": "/form",
+   "reason": "only JSON request bodies are supported",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": "hdr",
+   "path": "/h",
+   "reason": "reserved header 'authorization' is required",
+   "summary": null
+  },
+  {
+   "importable": true,
+   "method": "PUT",
+   "operationId": "optBody",
+   "path": "/items",
+   "reason": null,
+   "summary": null
+  },
+  {
+   "importable": true,
+   "method": "POST",
+   "operationId": "makeItem",
+   "path": "/items",
+   "reason": null,
+   "summary": null
+  },
+  {
+   "importable": true,
+   "method": "GET",
+   "operationId": "readItem",
+   "path": "/items/{itemId}",
+   "reason": null,
+   "summary": "Read"
+  },
+  {
+   "importable": true,
+   "method": "DELETE",
+   "operationId": "dropItem",
+   "path": "/items/{itemId}",
+   "reason": null,
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "OPTIONS",
+   "operationId": "optionsOp",
+   "path": "/options",
+   "reason": "OPTIONS is not supported",
+   "summary": null
+  },
+  {
+   "importable": false,
+   "method": "GET",
+   "operationId": "tree",
+   "path": "/tree",
+   "reason": "recursive schemas are not supported",
+   "summary": null
+  }
+ ],
+ "ops_py": "# Generated: operation id and exact version per key.\nOPS = {\n  \"crm.make_item\": [\n    \"01900000-0000-7000-8000-000000000002\",\n    1\n  ],\n  \"crm.read_item\": [\n    \"01900000-0000-7000-8000-000000000001\",\n    1\n  ]\n}\n",
+ "refusals": [
+  {
+   "input": {
+    "swagger": "2.0"
+   },
+   "kind": "document",
+   "message": "not an OpenAPI document",
+   "name": "document_swagger_2"
+  },
+  {
+   "input": {
+    "openapi": "3.2.0",
+    "paths": {}
+   },
+   "kind": "document",
+   "message": "only OpenAPI 3.0.x and 3.1.x are supported",
+   "name": "document_openapi_3_2"
+  },
+  {
+   "input": {
+    "openapi": "3.0.0"
+   },
+   "kind": "document",
+   "message": "paths are required",
+   "name": "document_without_paths"
+  },
+  {
+   "input": [],
+   "kind": "document",
+   "message": "not an OpenAPI document",
+   "name": "document_not_an_object"
+  },
+  {
+   "input": {
+    "openapi": "3.1.0",
+    "paths": []
+   },
+   "kind": "document",
+   "message": "paths are required",
+   "name": "document_paths_not_an_object"
+  },
+  {
+   "input": 5,
+   "kind": "selection_entry",
+   "message": "a selection is an operationId or {method, path}",
+   "name": "selection_not_an_id_or_pair"
+  },
+  {
+   "input": {
+    "method": "GET"
+   },
+   "kind": "selection_entry",
+   "message": "a selection is an operationId or {method, path}",
+   "name": "selection_pair_without_path"
+  },
+  {
+   "kind": "select",
+   "message": "GET /tree cannot be imported: recursive schemas are not supported",
+   "name": "select_recursive",
+   "overrides": null,
+   "selection": [
+    "tree"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "GET /api/ai/chat cannot be imported: blocked by the LLM endpoint deny list (llm)",
+   "name": "select_denied",
+   "overrides": null,
+   "selection": [
+    "chat"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "GET /c cannot be imported: cookie parameters are not supported",
+   "name": "select_cookie",
+   "overrides": null,
+   "selection": [
+    "cookie"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "GET /h cannot be imported: reserved header 'authorization' is required",
+   "name": "select_required_reserved_header",
+   "overrides": null,
+   "selection": [
+    "hdr"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "POST /form cannot be imported: only JSON request bodies are supported",
+   "name": "select_non_json_body",
+   "overrides": null,
+   "selection": [
+    "form"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "GET /ext cannot be imported: external $ref is not supported",
+   "name": "select_external_ref",
+   "overrides": null,
+   "selection": [
+    "ext"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "GET /broken cannot be imported: no responses declared",
+   "name": "select_no_responses",
+   "overrides": null,
+   "selection": [
+    "broken"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "OPTIONS /options cannot be imported: OPTIONS is not supported",
+   "name": "select_unsupported_method",
+   "overrides": null,
+   "selection": [
+    "optionsOp"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "operation not found in the spec",
+   "name": "select_unknown_operation",
+   "overrides": null,
+   "selection": [
+    "nope"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "select at least one operation",
+   "name": "select_empty",
+   "overrides": null,
+   "selection": []
+  },
+  {
+   "kind": "select",
+   "message": "op_key can only be overridden when one operation is selected",
+   "name": "override_op_key_needs_one_selection",
+   "overrides": {
+    "op_key": "x"
+   },
+   "selection": [
+    "readItem",
+    "makeItem"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "unknown override field",
+   "name": "override_unknown_field",
+   "overrides": {
+    "readItem": {
+     "bogus": 1
+    }
+   },
+   "selection": [
+    "readItem"
+   ]
+  },
+  {
+   "kind": "select",
+   "message": "op_key must be lowercase snake_case, 64 characters or fewer",
+   "name": "override_invalid_op_key",
+   "overrides": {
+    "op_key": "Bad Key"
+   },
+   "selection": [
+    "readItem"
+   ]
+  },
+  {
+   "input": {
+    "op_key": "x",
+    "service": "fr",
+    "source_key": "crm"
+   },
+   "kind": "model",
+   "message": "Value error, name exactly one of source_key or service",
+   "model": "ToolOperation",
+   "name": "tool_operation_two_origins"
+  },
+  {
+   "input": {
+    "op_key": "x"
+   },
+   "kind": "model",
+   "message": "Value error, name exactly one of source_key or service",
+   "model": "ToolOperation",
+   "name": "tool_operation_no_origin"
+  },
+  {
+   "input": {
+    "response_projection": []
+   },
+   "kind": "model",
+   "message": "Tuple should have at least 1 item after validation, not 0",
+   "model": "OperationOverride",
+   "name": "operation_override_empty_projection"
+  },
+  {
+   "input": {
+    "expected_error_statuses": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16
+    ]
+   },
+   "kind": "model",
+   "message": "Tuple should have at most 16 items after validation, not 17",
+   "model": "OperationOverride",
+   "name": "operation_override_too_many_statuses"
+  },
+  {
+   "input": {
+    "select": [
+     {
+      "method": "get",
+      "path": "/x"
+     }
+    ],
+    "spec_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "kind": "model",
+   "message": "Input should be a valid string",
+   "model": "ImportRequest",
+   "name": "import_request_lowercase_method"
+  },
+  {
+   "input": {
+    "overrides": {
+     "readItem": {
+      "expected_error_statuses": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7,
+       8,
+       9,
+       10,
+       11,
+       12,
+       13,
+       14,
+       15,
+       16
+      ]
+     }
+    },
+    "select": [
+     "readItem"
+    ],
+    "spec_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "kind": "model",
+   "message": "Tuple should have at most 16 items after validation, not 17",
+   "model": "ImportRequest",
+   "name": "import_request_too_many_statuses"
+  },
+  {
+   "input": {
+    "select": [
+     {
+      "extra": true,
+      "method": "GET",
+      "path": "/x"
+     }
+    ],
+    "spec_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "kind": "model",
+   "message": "Input should be a valid string",
+   "model": "ImportRequest",
+   "name": "import_request_selector_extra_field"
+  },
+  {
+   "input": {
+    "path": "openapi.json"
+   },
+   "kind": "model",
+   "message": "String should match pattern '^/[A-Za-z0-9._~/-]{0,255}$'",
+   "model": "SpecFetchRequest",
+   "name": "spec_fetch_request_non_canonical_path"
+  },
+  {
+   "input": {
+    "product": "Bad Product"
+   },
+   "kind": "model",
+   "message": "String should match pattern '^[a-z][a-z0-9-]{0,47}$'",
+   "model": "BindRequest",
+   "name": "bind_request_bad_product"
+  },
+  {
+   "input": {
+    "public_name": "x"
+   },
+   "kind": "model",
+   "message": "Field required",
+   "model": "ToolCreate",
+   "name": "tool_create_missing_fields"
+  }
+ ]
+}

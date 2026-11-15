@@ -23,3 +23,4 @@ pub mod crypto;
 pub mod guard;
 pub mod models;
 pub mod repository;
+pub mod tenant_repository;
