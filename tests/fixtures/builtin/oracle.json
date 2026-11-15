@@ -1,0 +1,2106 @@
+{
+ "scopes": {
+  "carebus-researcher": [
+   "legal_duw_document",
+   "legal_duw_search",
+   "legal_eli_act",
+   "legal_eli_act_text",
+   "legal_eli_search",
+   "legal_eurlex_act",
+   "legal_eurlex_text",
+   "legal_kio_document",
+   "legal_kio_search",
+   "legal_krs_extract",
+   "legal_saos_judgment",
+   "legal_saos_search",
+   "legal_uokik_document",
+   "legal_uokik_search",
+   "legal_vat_whitelist",
+   "research_literature_record",
+   "research_literature_search",
+   "research_stats_confidence_interval",
+   "research_stats_meta_analysis",
+   "research_stats_trend",
+   "web_scrape"
+  ],
+  "carebus-tool-executor": [
+   "crm_get_start_data",
+   "crm_verify_customer",
+   "delivery_track_shipment",
+   "faq_ask",
+   "order_create_rma",
+   "order_create_warranty_claim",
+   "order_get_order",
+   "order_get_payments",
+   "order_issue_refund",
+   "procedures_get_procedure",
+   "rules_check_payment_issue",
+   "rules_check_return_window",
+   "rules_check_warranty"
+  ],
+  "licence:care-bus": [
+   "crm_get_start_data",
+   "crm_verify_customer",
+   "delivery_track_shipment",
+   "faq_ask",
+   "legal_duw_document",
+   "legal_duw_search",
+   "legal_eli_act",
+   "legal_eli_act_text",
+   "legal_eli_search",
+   "legal_eurlex_act",
+   "legal_eurlex_text",
+   "legal_kio_document",
+   "legal_kio_search",
+   "legal_krs_extract",
+   "legal_saos_judgment",
+   "legal_saos_search",
+   "legal_uokik_document",
+   "legal_uokik_search",
+   "legal_vat_whitelist",
+   "order_create_rma",
+   "order_create_warranty_claim",
+   "order_get_order",
+   "order_get_payments",
+   "order_issue_refund",
+   "procedures_get_procedure",
+   "research_literature_record",
+   "research_literature_search",
+   "research_stats_confidence_interval",
+   "research_stats_meta_analysis",
+   "research_stats_trend",
+   "rules_check_payment_issue",
+   "rules_check_return_window",
+   "rules_check_warranty",
+   "web_scrape"
+  ]
+ },
+ "tools": [
+  {
+   "description": "List a source's operations: op_key, version, status, method/path, effect and the\ninput/output schemas the script calls them with.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_key"
+    ],
+    "type": "object"
+   },
+   "name": "builder_operation_list"
+  },
+  {
+   "description": "Create a new draft version of an operation with the given changes. Tools pin exact\nversions: call builder_tool_update afterwards so a tool picks up the new one.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "effect": {
+      "anyOf": [
+       {
+        "pattern": "^(read_only|writes)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "empty_response": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "expected_error_statuses": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "expected_version": {
+      "description": "the version you last read",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "idempotency": {
+      "anyOf": [
+       {
+        "pattern": "^(none|downstream_key)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "max_retries": {
+      "anyOf": [
+       {
+        "maximum": 3,
+        "minimum": 0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "op_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "redact_fields": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "response_projection": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "timeout_seconds": {
+      "anyOf": [
+       {
+        "maximum": 300,
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "source_key",
+     "op_key",
+     "expected_version"
+    ],
+    "type": "object"
+   },
+   "name": "builder_operation_update"
+  },
+  {
+   "description": "Create draft operations (each addressed by an `op_key`) from the cached spec. Re-importing a\nkey adds a new version.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "overrides": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Per operation, keyed by operationId or \"GET /path\": {\"op_key\":..,\"effect\":\"read_only\"|\"writes\",\"expected_error_statuses\":[404],\"response_projection\":[\"/data\"],\"timeout_seconds\":20}. Handle 4xx in your script by listing them in expected_error_statuses."
+     },
+     "select": {
+      "description": "operationIds, or {\"method\":\"GET\",\"path\":\"/customers/{id}\"}",
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "additionalProperties": true,
+         "type": "object"
+        }
+       ]
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "spec_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_key",
+     "spec_sha256",
+     "select"
+    ],
+    "type": "object"
+   },
+   "name": "builder_operations_import"
+  },
+  {
+   "description": "The run envelope plus the trace of upstream calls (method, path, status, duration, reason).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "run_id": {
+      "description": "run id from tool_test",
+      "type": "string"
+     }
+    },
+    "required": [
+     "run_id"
+    ],
+    "type": "object"
+   },
+   "name": "builder_run_get"
+  },
+  {
+   "description": "Register an HTTPS API as a source of yours. Returns the source view (never the secret).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "auth": {
+      "additionalProperties": true,
+      "description": "Auth config by \"kind\": {\"kind\":\"none\"}; {\"kind\":\"static_bearer\"}; {\"kind\":\"static_header\",\"header\":\"X-Api-Key\"}; {\"kind\":\"query_param\",\"param\":\"key\"}; {\"kind\":\"basic\",\"username\":\"u\"}; {\"kind\":\"oauth2_client_credentials\",\"token_url\":\"https://...\",\"client_id\":\"..\",\"scope\":\"..\",\"client_auth\":\"basic\"|\"post\"}. The secret itself goes in `token` (or builder_source_set_secret).",
+      "type": "object"
+     },
+     "base_url": {
+      "description": "public https URL of the API (no IP, no internal host)",
+      "type": "string"
+     },
+     "idempotency_header": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "max_request_bytes": {
+      "anyOf": [
+       {
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "max_response_bytes": {
+      "anyOf": [
+       {
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "spec_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "path of the OpenAPI JSON document, e.g. \"/openapi.json\""
+     },
+     "token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "the secret for kinds that need one (write-only, never returned)"
+     }
+    },
+    "required": [
+     "source_key",
+     "base_url",
+     "auth"
+    ],
+    "type": "object"
+   },
+   "name": "builder_source_create"
+  },
+  {
+   "description": "Disable a source: its operations and tools stop working; the key stays reserved.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "description": "the revision you last read (optimistic lock)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_key",
+     "expected_revision"
+    ],
+    "type": "object"
+   },
+   "name": "builder_source_disable"
+  },
+  {
+   "description": "List your sources (no secrets) with their revisions.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "default": 50,
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "offset": {
+      "default": 0,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "name": "builder_source_list"
+  },
+  {
+   "description": "Set or rotate a source's secret. Write-only: the response shows only has_token.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "description": "the revision you last read (optimistic lock)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "token": {
+      "description": "the new secret (1-4096 printable characters)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_key",
+     "token",
+     "expected_revision"
+    ],
+    "type": "object"
+   },
+   "name": "builder_source_set_secret"
+  },
+  {
+   "description": "Replace a source's configuration (same fields as source_create). Omitted token keeps it.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "auth": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "base_url": {
+      "type": "string"
+     },
+     "expected_revision": {
+      "description": "the revision you last read (optimistic lock)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "idempotency_header": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "max_request_bytes": {
+      "anyOf": [
+       {
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "max_response_bytes": {
+      "anyOf": [
+       {
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "spec_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "omit to keep the stored secret (write-only)"
+     }
+    },
+    "required": [
+     "source_key",
+     "expected_revision",
+     "base_url",
+     "auth"
+    ],
+    "type": "object"
+   },
+   "name": "builder_source_update"
+  },
+  {
+   "description": "Fetch the source's OpenAPI 3.0/3.1 document (JSON only) through its credential. Returns its\nsha256 and every operation with `importable` and a `reason` when not.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "document path on the same origin; default: the source spec_path"
+     },
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_key"
+    ],
+    "type": "object"
+   },
+   "name": "builder_spec_fetch"
+  },
+  {
+   "description": "List the operations of a previously fetched spec (by sha256).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "source_key": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "spec_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_key",
+     "spec_sha256"
+    ],
+    "type": "object"
+   },
+   "name": "builder_spec_operations"
+  },
+  {
+   "description": "Create a draft tool (a script over your operations).\n\nSCRIPT GUIDE. A tool is ONE deterministic async Python script run in an isolated sandbox. Send\nfiles=[{\"path\":\"tool.py\",\"content\":\"...\"}]; the entrypoint is tool:main, i.e.\n`async def main(inputs, ctx)` returning the result envelope. The host adds kit.py (helpers) and\nops.py (operation table): never send them, just `import kit`. Standard library only; the only way\nout of the sandbox is kit.call.\nCalling your operations: the script key is \"<source_key>.<op_key>\" (platform service operations:\n\"<service>.<op_key>\"), exactly the entries of `ops`. Arguments are the operation's input_schema\nfields (see builder_operation_list).\n  status, body = await kit.call(ctx, \"crm.get_customer\", {\"id\": inputs[\"id\"]})\n    -> (200, body); or (status, body) for a 4xx the operation lists in expected_error_statuses.\n       Any other failure raises RuntimeError(\"api_call_denied\").\n  body = await kit.call_ok(ctx, key, args, what=\"load customer\")   # non-200 ends the tool with backend_error\n  return await kit.guarded(run(inputs, ctx))                        # turns aborts/denied calls into envelopes\nResult envelope (build it with the helpers; invariants are enforced):\n  kit.completed(data, checks, next_steps)        -> status ok (check_failed if a check fails)\n  kit.check(name, \"pass\"|\"fail\"|\"degraded\"|\"error\", summary)   # name: lowercase snake_case\n  kit.precondition_failed(reason, [kit.step(\"other_tool\", \"why\")])   # reason: snake_case\n  kit.backend_error(\"message\", retryable=False)\n  kit.pending(token, next_steps) with kit.encode_token(tool, state) / kit.decode_token(token, tool)\n  kit.step(tool, reason, arguments); kit.clip(text); kit.Budget(wall_seconds) and kit.poll(...)\n    for bounded waiting; kit.describe(status, body) summarises an unexpected HTTP status.\nWrite tools: set effect=\"writes\" if ANY operation the tool uses writes; test them with\nconfirm_writes=true only against data you accept changing.\n",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+     },
+     "effect": {
+      "pattern": "^(read_only|writes)$",
+      "type": "string"
+     },
+     "files": {
+      "description": "[{\"path\":\"tool.py\",\"content\":\"..\"}]",
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+     },
+     "input_schema": {
+      "additionalProperties": true,
+      "description": "JSON Schema: {\"type\":\"object\",\"additionalProperties\":false,\"properties\":{..}}",
+      "type": "object"
+     },
+     "limits": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "operation": {
+      "description": "\"object.verb\"",
+      "pattern": "^[a-z][a-z0-9_]{0,31}\\.[a-z][a-z0-9_]{0,31}$",
+      "type": "string"
+     },
+     "ops": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "[{\"source_key\":\"crm\",\"op_key\":\"get_customer\"}] or [{\"service\":\"..\",\"op_key\":\"..\"}]"
+     },
+     "public_name": {
+      "description": "the MCP tool name callers will see, e.g. crm_find_customer",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "result_schema": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "omit: the standard result envelope"
+     }
+    },
+    "required": [
+     "public_name",
+     "operation",
+     "description",
+     "files",
+     "input_schema",
+     "effect"
+    ],
+    "type": "object"
+   },
+   "name": "builder_tool_create"
+  },
+  {
+   "description": "Read a tool version (default: latest): manifest, status, revision, your script files and ops.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "tool_id": {
+      "description": "tool id (uuid) returned by tool_create / tool_list",
+      "type": "string"
+     },
+     "version": {
+      "anyOf": [
+       {
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "tool_id"
+    ],
+    "type": "object"
+   },
+   "name": "builder_tool_get"
+  },
+  {
+   "description": "List your tools' versions with status and revision.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "default": 50,
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "offset": {
+      "default": 0,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "name": "builder_tool_list"
+  },
+  {
+   "description": "Publish a tool version together with the draft services/operations it pins (one atomic step).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "description": "the revision you last read (optimistic lock)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "tool_id": {
+      "description": "tool id (uuid) returned by tool_create / tool_list",
+      "type": "string"
+     },
+     "version": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "tool_id",
+     "version",
+     "expected_revision"
+    ],
+    "type": "object"
+   },
+   "name": "builder_tool_publish"
+  },
+  {
+   "description": "Run a draft or published tool version once (no binding needed). Returns the run envelope;\nread the call trace and error excerpts with builder_run_get.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "confirm_writes": {
+      "default": false,
+      "description": "required for effect=writes tools: you accept real writes",
+      "type": "boolean"
+     },
+     "inputs": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "tool_id": {
+      "description": "tool id (uuid) returned by tool_create / tool_list",
+      "type": "string"
+     },
+     "version": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "tool_id",
+     "version"
+    ],
+    "type": "object"
+   },
+   "name": "builder_tool_test"
+  },
+  {
+   "description": "Create a new draft version of a tool; omitted fields keep their value, `files` replaces all script files, `ops` replaces the operation list and operations are re-pinned to their newest versions.\n\nSCRIPT GUIDE. A tool is ONE deterministic async Python script run in an isolated sandbox. Send\nfiles=[{\"path\":\"tool.py\",\"content\":\"...\"}]; the entrypoint is tool:main, i.e.\n`async def main(inputs, ctx)` returning the result envelope. The host adds kit.py (helpers) and\nops.py (operation table): never send them, just `import kit`. Standard library only; the only way\nout of the sandbox is kit.call.\nCalling your operations: the script key is \"<source_key>.<op_key>\" (platform service operations:\n\"<service>.<op_key>\"), exactly the entries of `ops`. Arguments are the operation's input_schema\nfields (see builder_operation_list).\n  status, body = await kit.call(ctx, \"crm.get_customer\", {\"id\": inputs[\"id\"]})\n    -> (200, body); or (status, body) for a 4xx the operation lists in expected_error_statuses.\n       Any other failure raises RuntimeError(\"api_call_denied\").\n  body = await kit.call_ok(ctx, key, args, what=\"load customer\")   # non-200 ends the tool with backend_error\n  return await kit.guarded(run(inputs, ctx))                        # turns aborts/denied calls into envelopes\nResult envelope (build it with the helpers; invariants are enforced):\n  kit.completed(data, checks, next_steps)        -> status ok (check_failed if a check fails)\n  kit.check(name, \"pass\"|\"fail\"|\"degraded\"|\"error\", summary)   # name: lowercase snake_case\n  kit.precondition_failed(reason, [kit.step(\"other_tool\", \"why\")])   # reason: snake_case\n  kit.backend_error(\"message\", retryable=False)\n  kit.pending(token, next_steps) with kit.encode_token(tool, state) / kit.decode_token(token, tool)\n  kit.step(tool, reason, arguments); kit.clip(text); kit.Budget(wall_seconds) and kit.poll(...)\n    for bounded waiting; kit.describe(status, body) summarises an unexpected HTTP status.\nWrite tools: set effect=\"writes\" if ANY operation the tool uses writes; test them with\nconfirm_writes=true only against data you accept changing.\n",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "effect": {
+      "anyOf": [
+       {
+        "pattern": "^(read_only|writes)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "expected_revision": {
+      "description": "the revision you last read (optimistic lock)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "files": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "input_schema": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "limits": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "ops": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "result_schema": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "tool_id": {
+      "description": "tool id (uuid) returned by tool_create / tool_list",
+      "type": "string"
+     }
+    },
+    "required": [
+     "tool_id",
+     "expected_revision"
+    ],
+    "type": "object"
+   },
+   "name": "builder_tool_update"
+  },
+  {
+   "description": "Re-bind your existing product bindings so they include your published toolkits.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "product": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "limit to one product; default all"
+     }
+    },
+    "type": "object"
+   },
+   "name": "builder_toolkit_bind"
+  },
+  {
+   "description": "Create a draft toolkit of your published tools (or its next version).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+     },
+     "expected_revision": {
+      "anyOf": [
+       {
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "name": {
+      "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "type": "string"
+     },
+     "toolkit_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "set with expected_revision for a new version"
+     },
+     "tools": {
+      "description": "[{\"tool_id\":\"..\",\"version\":1}] (version omitted: newest published)",
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "name",
+     "description",
+     "tools"
+    ],
+    "type": "object"
+   },
+   "name": "builder_toolkit_create"
+  },
+  {
+   "description": "Publish a toolkit version and re-bind your product bindings so they include it.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "description": "the revision you last read (optimistic lock)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "toolkit_id": {
+      "type": "string"
+     },
+     "version": {
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "toolkit_id",
+     "version",
+     "expected_revision"
+    ],
+    "type": "object"
+   },
+   "name": "builder_toolkit_publish"
+  },
+  {
+   "description": "Most recent orders, shipments, payments and communications (last 90 days).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "customer_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "customer_id"
+    ],
+    "type": "object"
+   },
+   "name": "crm_get_start_data"
+  },
+  {
+   "description": "Verify a customer id and return name, tier and verification status.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "customer_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "customer_id"
+    ],
+    "type": "object"
+   },
+   "name": "crm_verify_customer"
+  },
+  {
+   "description": "Carrier status, scan events and ETA for a shipment.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "shipment_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "shipment_id"
+    ],
+    "type": "object"
+   },
+   "name": "delivery_track_shipment"
+  },
+  {
+   "description": "Answer a general question from the knowledge stores, with cited sources.\n\nleaf_ids (care-bus sets it, never the model): search exactly these leaf stores instead of routing\nfrom the tenant's root; care-bus passes the stores outside every legal-matter wall. The answer then\ncarries scope.leaf_ids, the filter applied, which care-bus requires before it uses the answer.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "leaf_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "question": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "question"
+    ],
+    "type": "object"
+   },
+   "name": "faq_ask"
+  },
+  {
+   "description": "One position of the Dolnośląskie official journal by (year, position): title, act type\nand number, issuing body, act and publication dates, keywords, status and the act text\n(plain, from the published PDF). Cite `url`.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "max_chars": {
+      "default": 25000,
+      "type": "integer"
+     },
+     "position": {
+      "type": "integer"
+     },
+     "year": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "year",
+     "position"
+    ],
+    "type": "object"
+   },
+   "name": "legal_duw_document"
+  },
+  {
+   "description": "Search the official journal of the Dolnośląskie voivodeship (local law: municipal and\ncounty resolutions, voivode orders) by words of the act title, optionally one year. Newest\nfirst. Returns (year, position) for legal_duw_document.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "page": {
+      "default": 1,
+      "type": "integer"
+     },
+     "page_size": {
+      "default": 20,
+      "type": "integer"
+     },
+     "query": {
+      "type": "string"
+     },
+     "year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "legal_duw_search"
+  },
+  {
+   "description": "Metadata of one Polish act by ELI id (e.g. \"DU/1964/59\"): status, whether it is in force,\ndates, keywords, and related acts (amending acts, consolidated texts \"Inf. o tekście\njednolitym\", Constitutional Tribunal rulings, ...).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "eli": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "eli"
+    ],
+    "type": "object"
+   },
+   "name": "legal_eli_act"
+  },
+  {
+   "description": "Text of a Polish act by ELI id; with `article` (\"133\", \"133a\", \"133^1\") only that article.\n\nwording=\"current\" (default): the newest consolidated text (\"tekst jednolity\") of the act,\nHTML or else its PDF. Amendments published after that consolidation are NOT in it; they are\nlisted in amended_after_consolidation ({eli, promulgation, date_unknown}) -- tell the reader to\ncheck them. consolidation_date_inferred=true means the cut-off was not published and a\nconservative earlier date was used, so the list may over-report. Without any\nconsolidation the act's own text is used and every amending act is listed.\nwording=\"original\": the act's HTML text as originally published.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "article": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "eli": {
+      "type": "string"
+     },
+     "max_chars": {
+      "default": 30000,
+      "type": "integer"
+     },
+     "wording": {
+      "default": "current",
+      "enum": [
+       "current",
+       "original"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "eli"
+    ],
+    "type": "object"
+   },
+   "name": "legal_eli_act_text"
+  },
+  {
+   "description": "Search Polish legal acts (Dziennik Ustaw / Monitor Polski) in the Sejm ELI database.\n\ntitle: words of the act title (e.g. \"kodeks rodzinny\"); keyword: ELI subject keyword;\ntype: act type such as \"Ustawa\", \"Rozporządzenie\", \"Obwieszczenie\". Returns ELI ids\n(e.g. \"DU/1964/59\") to pass to legal_eli_act / legal_eli_act_text.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "in_force_only": {
+      "default": true,
+      "type": "boolean"
+     },
+     "keyword": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "limit": {
+      "default": 20,
+      "type": "integer"
+     },
+     "offset": {
+      "default": 0,
+      "type": "integer"
+     },
+     "publisher": {
+      "default": "DU",
+      "enum": [
+       "DU",
+       "MP"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "name": "legal_eli_search"
+  },
+  {
+   "description": "Metadata of one EU act by CELEX number (e.g. \"32016R0679\" = GDPR): Polish and English\ntitle, document date, whether it is in force, entry-into-force dates, end of validity.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "celex": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "celex"
+    ],
+    "type": "object"
+   },
+   "name": "legal_eurlex_act"
+  },
+  {
+   "description": "Plain text of an EU act by CELEX number, from CELLAR (lang: ISO 639-2 code, default\n\"pol\"; \"eng\" for English).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "celex": {
+      "type": "string"
+     },
+     "lang": {
+      "default": "pol",
+      "type": "string"
+     },
+     "max_chars": {
+      "default": 30000,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "celex"
+    ],
+    "type": "object"
+   },
+   "name": "legal_eurlex_text"
+  },
+  {
+   "description": "One KIO ruling by the id from legal_kio_search: signature(s) and outcome, date, body,\ncontracting authority, key Pzp provisions and the full ruling text (plain). Cite `url`.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "integer"
+     },
+     "max_chars": {
+      "default": 25000,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "type": "object"
+   },
+   "name": "legal_kio_document"
+  },
+  {
+   "description": "Search KIO (National Appeal Chamber, public procurement) rulings on orzeczenia.uzp.gov.pl\nby phrase (e.g. \"rażąco niska cena\", \"art. 224 ust. 1\") and/or signature (\"KIO 2105/22\").\n10 hits per page, most relevant first. Returns ids for legal_kio_document.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "document_type": {
+      "anyOf": [
+       {
+        "enum": [
+         "wyrok",
+         "postanowienie",
+         "uchwała"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "page": {
+      "default": 1,
+      "type": "integer"
+     },
+     "query": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "signature": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "name": "legal_kio_search"
+  },
+  {
+   "description": "Current KRS extract of a Polish company / organisation by KRS number (register \"P\" =\nentrepreneurs, \"S\" = associations/foundations): name, legal form, NIP, REGON, address,\nshare capital, who represents it and how, main business activities. Personal names are\nmasked by the source.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "krs": {
+      "type": "string"
+     },
+     "register": {
+      "default": "P",
+      "enum": [
+       "P",
+       "S"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "krs"
+    ],
+    "type": "object"
+   },
+   "name": "legal_krs_extract"
+  },
+  {
+   "description": "One Polish court judgment from SAOS by numeric id: court, judges, legal bases,\nreferenced regulations and the full text (plain).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "integer"
+     },
+     "max_chars": {
+      "default": 60000,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "type": "object"
+   },
+   "name": "legal_saos_judgment"
+  },
+  {
+   "description": "Full-text search of Polish court judgments (SAOS), newest first. Dates YYYY-MM-DD.\nReturns judgment ids for legal_saos_judgment.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "case_number": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "court_type": {
+      "anyOf": [
+       {
+        "enum": [
+         "COMMON",
+         "SUPREME",
+         "ADMINISTRATIVE",
+         "CONSTITUTIONAL_TRIBUNAL",
+         "NATIONAL_APPEAL_CHAMBER"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "date_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "date_to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "page": {
+      "default": 0,
+      "type": "integer"
+     },
+     "page_size": {
+      "default": 10,
+      "type": "integer"
+     },
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "legal_saos_search"
+  },
+  {
+   "description": "One UOKiK President's decision by the unid from legal_uokik_search: number, date, case\nsignature, participants, practice, penalty, appeal, related court judgments and the decision\ntext (plain, from the published PDF). Cite `url`.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "max_chars": {
+      "default": 25000,
+      "type": "integer"
+     },
+     "unid": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "unid"
+    ],
+    "type": "object"
+   },
+   "name": "legal_uokik_document"
+  },
+  {
+   "description": "Search decisions of the President of UOKiK (competition and consumer protection) on\ndecyzje.uokik.gov.pl: full-text words, decision number (\"DDK-1/2016\"), case signature or a\nparticipant (company) name. Returns unids for legal_uokik_document.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "decision_number": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "page": {
+      "default": 1,
+      "type": "integer"
+     },
+     "page_size": {
+      "default": 20,
+      "type": "integer"
+     },
+     "participant": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "query": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "signature": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "name": "legal_uokik_search"
+  },
+  {
+   "description": "Check a Polish VAT taxpayer on the Ministry of Finance whitelist by NIP: VAT status\n(\"Czynny\" active, \"Zwolniony\" exempt, or not registered), name, REGON, KRS, dates and the\nnumber of registered bank accounts. With `account` (26-digit NRB) it instead answers whether\nthat account is registered for the NIP on the date (default today, Europe/Warsaw).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "account": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "nip": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "nip"
+    ],
+    "type": "object"
+   },
+   "name": "legal_vat_whitelist"
+  },
+  {
+   "description": "Create a return authorisation. Idempotent per idempotency_key.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "idempotency_key": {
+      "type": "string"
+     },
+     "order_id": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id",
+     "reason",
+     "idempotency_key"
+    ],
+    "type": "object"
+   },
+   "name": "order_create_rma"
+  },
+  {
+   "description": "Register a warranty claim and book a pickup. Idempotent per idempotency_key.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "defect": {
+      "type": "string"
+     },
+     "idempotency_key": {
+      "type": "string"
+     },
+     "order_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id",
+     "defect",
+     "idempotency_key"
+    ],
+    "type": "object"
+   },
+   "name": "order_create_warranty_claim"
+  },
+  {
+   "description": "Get one order with lines, status and shipment id.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "order_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id"
+    ],
+    "type": "object"
+   },
+   "name": "order_get_order"
+  },
+  {
+   "description": "All payments captured for an order.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "order_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id"
+    ],
+    "type": "object"
+   },
+   "name": "order_get_payments"
+  },
+  {
+   "description": "Refund one payment in full or in part. Idempotent per idempotency_key.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "amount": {
+      "type": "number"
+     },
+     "idempotency_key": {
+      "type": "string"
+     },
+     "payment_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "payment_id",
+     "amount",
+     "idempotency_key"
+    ],
+    "type": "object"
+   },
+   "name": "order_issue_refund"
+  },
+  {
+   "description": "Steps of the PUBLISHED version of a procedure (PKO/PDDL model from carebus-api).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "name": "procedures_get_procedure"
+  },
+  {
+   "description": "One literature record by the `id` research_literature_search returned: title, authors\n(with affiliations), year, venue, upstream ids, canonical url and the full abstract.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "type": "object"
+   },
+   "name": "research_literature_record"
+  },
+  {
+   "description": "Search scientific literature (PubMed, Europe PMC, Crossref, Semantic Scholar, arXiv, ...)\nin one federated query. Each item has a stable `id` for research_literature_record, upstream\nids (doi, pmid), a canonical `url` and the abstract. Default sources: all the engine has\nenabled; `sources_failed` lists any that errored or are not available. Can take ~10-60 s.\nAbstracts are capped (default 1500 chars) to keep the result small; quote from\nresearch_literature_record, which returns the full abstract.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "abstract_max_chars": {
+      "default": 1500,
+      "type": "integer"
+     },
+     "max_results_per_source": {
+      "default": 3,
+      "type": "integer"
+     },
+     "open_access_only": {
+      "default": false,
+      "type": "boolean"
+     },
+     "query": {
+      "type": "string"
+     },
+     "sort_by": {
+      "default": "relevance",
+      "enum": [
+       "relevance",
+       "citation_count",
+       "year"
+      ],
+      "type": "string"
+     },
+     "sources": {
+      "anyOf": [
+       {
+        "items": {
+         "enum": [
+          "pubmed",
+          "europe_pmc",
+          "crossref",
+          "semantic_scholar",
+          "arxiv",
+          "openlibrary"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "year_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "year_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "research_literature_search"
+  },
+  {
+   "description": "Mean of 2+ values with its confidence interval (normal approximation, or percentile\nbootstrap with n_bootstrap resamples, 100-100000).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "confidence_level": {
+      "default": 0.95,
+      "type": "number"
+     },
+     "method": {
+      "default": "normal",
+      "enum": [
+       "normal",
+       "bootstrap"
+      ],
+      "type": "string"
+     },
+     "n_bootstrap": {
+      "default": 10000,
+      "type": "integer"
+     },
+     "values": {
+      "items": {
+       "type": "number"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "values"
+    ],
+    "type": "object"
+   },
+   "name": "research_stats_confidence_interval"
+  },
+  {
+   "description": "Inverse-variance meta-analysis (fixed or random effects) over 2+ study results, each an\neffect size with its standard error and sample size. Returns the pooled effect, its CI,\nheterogeneity (Q, I^2) and each study's weight (same order as given).",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "confidence_level": {
+      "default": 0.95,
+      "type": "number"
+     },
+     "method": {
+      "default": "random",
+      "enum": [
+       "fixed",
+       "random"
+      ],
+      "type": "string"
+     },
+     "studies": {
+      "items": {
+       "properties": {
+        "effect_size": {
+         "type": "number"
+        },
+        "label": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null
+        },
+        "sample_size": {
+         "type": "integer"
+        },
+        "standard_error": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "effect_size",
+        "standard_error",
+        "sample_size"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "studies"
+    ],
+    "type": "object"
+   },
+   "name": "research_stats_meta_analysis"
+  },
+  {
+   "description": "Trend test over a time series of 3+ (timestamp, value) points: Mann-Kendall (monotonic,\nnon-parametric) or linear regression (slope + intercept). Returns increasing / decreasing /\nno_trend with the p-value and test statistic.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "data": {
+      "items": {
+       "properties": {
+        "timestamp": {
+         "type": "number"
+        },
+        "value": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "timestamp",
+        "value"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "test": {
+      "default": "mann_kendall",
+      "enum": [
+       "mann_kendall",
+       "linear_regression"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "data"
+    ],
+    "type": "object"
+   },
+   "name": "research_stats_trend"
+  },
+  {
+   "description": "PAY-04: two equal captures within 5 minutes count as a duplicate charge.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "error_type": {
+      "type": "string"
+     },
+     "order_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id",
+     "error_type"
+    ],
+    "type": "object"
+   },
+   "name": "rules_check_payment_issue"
+  },
+  {
+   "description": "RET-01: returns are allowed for 30 days after delivery. category and delivered_on are accepted because step args send them; the rule reads both from the order.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "category": {
+      "type": "string"
+     },
+     "delivered_on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "order_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id",
+     "category"
+    ],
+    "type": "object"
+   },
+   "name": "rules_check_return_window"
+  },
+  {
+   "description": "WAR-01: 24 months of warranty after delivery. category and delivered_on are accepted, not forwarded.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "category": {
+      "type": "string"
+     },
+     "delivered_on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "order_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "order_id",
+     "category"
+    ],
+    "type": "object"
+   },
+   "name": "rules_check_warranty"
+  },
+  {
+   "description": "Fetch one public web page (http/https) and return its title and readable text.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "max_chars": {
+      "default": 30000,
+      "type": "integer"
+     },
+     "url": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   },
+   "name": "web_scrape"
+  }
+ ]
+}
