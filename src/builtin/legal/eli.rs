@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -10,9 +11,20 @@ use serde_json::{Map, Value, json};
 use crate::builtin::{BuiltinProvider, BuiltinTool, boxed};
 
 use super::{
-    Clients, Service, argument, bool_or, child, child_or, element_text, enum_or, html_to_text,
-    int_or, optional_int, optional_string, pdf_text, schema, shown_repr, success, truncate, truthy,
+    Clients, Service, TtlCache, argument, bool_or, child, child_or, element_text, enum_or,
+    html_to_text, int_or, optional_int, optional_string, schema, shown_repr, success, truncate,
+    truthy,
 };
+
+/// The reference's `_pdf_cache` (`eli.py:183`): parsed consolidated PDFs, keyed by path, eight
+/// entries for a day. A PDF is immutable once published, so a repeat citation is free.
+static PDF_CACHE: LazyLock<TtlCache> =
+    LazyLock::new(|| TtlCache::new(8, Duration::from_secs(24 * 3600)));
+
+/// Empty the consolidated-PDF text cache (the reference's `clear_pdf_cache` test hook).
+pub fn clear_pdf_cache() {
+    PDF_CACHE.clear();
+}
 
 /// The reference's `_ELI`: `DU/1964/59`, `MP/2020/1`.
 static ELI_ID: LazyLock<Regex> = LazyLock::new(|| {
@@ -515,18 +527,42 @@ async fn current(
     } else {
         source_format = "pdf";
         let path = pdf_path(&source_path, &meta);
-        let full = client
-            .get_bytes(&path, false, Some("consolidated PDF not found"), None)
-            .await?;
-        if full.len() > MAX_CONSOLIDATED_PDF_BYTES {
-            return Err(format!(
-                "[permanent] consolidated PDF too large ({} bytes)",
-                full.len()
-            ));
+        // The reference caches the parsed text by path (`eli.py:183,232-243`); its size check
+        // runs only on a miss.
+        // Its OWN cache: the document cache beside it is the search/doc store, and a 40 MB PDF
+        // text must not evict (or be evicted by) a UOKiK document.
+        let text = match PDF_CACHE.get(&path) {
+            Some(text) => text.as_str().unwrap_or_default().to_owned(),
+            None => {
+                let full = client
+                    .get_bytes(&path, false, Some("consolidated PDF not found"), None)
+                    .await?;
+                if full.len() > MAX_CONSOLIDATED_PDF_BYTES {
+                    return Err(format!(
+                        "[permanent] consolidated PDF too large ({} bytes)",
+                        full.len()
+                    ));
+                }
+                let text = super::pdf_full_text(full).await?;
+                PDF_CACHE.put(path.clone(), Value::String(text.clone()));
+                text
+            }
+        };
+        match suffix {
+            None => Some(text),
+            Some(suffix) => match crate::pdf::cut_article(&text, suffix) {
+                Ok(article) => article,
+                Err(ambiguous) => {
+                    let flat = &ambiguous.0;
+                    return Err(format!(
+                        "[permanent] article ambiguous: {} -- {} prints it as 'Art. {flat}.' \
+                         which could also be a real article {flat}; check the PDF",
+                        super::python_str(article),
+                        source_eli
+                    ));
+                }
+            },
         }
-        // The reference cuts the requested article out of the PDF text here; this build has
-        // no PDF parser (see `super::pdf_text`), so the PDF-only path is a permanent error.
-        Some(pdf_text(&full)?)
     };
     let Some(text) = text else {
         return Err(format!(

@@ -13,15 +13,12 @@
 //! President's decisions (decyzje.uokik.gov.pl) and the Dolnośląskie official journal
 //! (edzienniki.duw.pl).
 //!
-//! Two behaviours are deliberately narrower than the reference, because this crate carries no
-//! PDF parser and this card adds no dependency:
-//!
-//! * [`pdf_text`] cannot extract text, so the PDF-only paths of `eli_act_text` (a consolidated
-//!   text without HTML), `duw_document` and `uokik_document` fetch and validate their PDF but
-//!   then answer the reference's damaged-PDF permanent error. HTML paths are unaffected.
-//! * Requests ask for `Accept-Encoding: identity` (this build has no gzip decoder), and the
-//!   HTML entity table covers the common Latin/Polish named entities plus every numeric
-//!   reference; the reference decodes the full HTML5 table.
+//! One behaviour here is deliberately narrower than the reference, because this build has no
+//! gzip decoder: requests ask for `Accept-Encoding: identity`. The HTML entity table covers the
+//! common Latin/Polish named entities plus every numeric reference; the reference decodes the
+//! full HTML5 table. PDF text is ported (`crate::pdf`): the PDF-only paths of `eli_act_text`
+//! (a consolidated text without HTML), `duw_document` and `uokik_document` extract the
+//! document's text exactly as the reference does, within the same page cap and wall clock.
 //!
 //! Nothing here logs a request body, an argument or a result: those carry the caller's query.
 
@@ -1573,22 +1570,49 @@ pub async fn fetch_pdf(
     Ok(body)
 }
 
-/// PDF -> plain text. NOT PORTED: this crate carries no PDF parser and this card adds no
-/// dependency, so every PDF-only path answers the reference's damaged-PDF permanent error.
-/// The class-shaped suffix mirrors the reference's `cannot read the PDF text: {ClassName}`.
-pub fn pdf_text(data: &[u8]) -> Result<String, String> {
-    let _ = data;
-    Err("[permanent] cannot read the PDF text: PdfParserUnavailable".to_owned())
+/// PDF -> plain text. The class-shaped suffix mirrors the reference's
+/// `cannot read the PDF text: {ClassName}`; this parser reports one stable class for pypdf's
+/// family of read errors.
+const PDF_TEXT_ERROR: &str = "[permanent] cannot read the PDF text: PdfReadError";
+
+/// The reference's `PDF_TIMEOUT_S`: wall time for one extraction (`scrape_util.py:20`). The
+/// extraction is CPU-bound and runs on a blocking thread; a timed-out one is left to finish, as
+/// the reference's worker thread is (the page cap bounds it).
+const PDF_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// PDF -> plain text of the first [`crate::pdf::MAX_PDF_PAGES`] pages, the reference's
+/// `scrape_util.pdf_text`: one worker thread, one 60 s wall clock, and the reference's two
+/// permanent error texts.
+pub async fn pdf_text(data: Vec<u8>) -> Result<String, String> {
+    let extraction = tokio::task::spawn_blocking(move || crate::pdf::text(&data));
+    match tokio::time::timeout(PDF_TIMEOUT, extraction).await {
+        Err(_) => Err(format!(
+            "[permanent] reading the PDF text took over {} s",
+            PDF_TIMEOUT.as_secs()
+        )),
+        // A panicked extraction is a damaged file's class, never a process failure.
+        Ok(Err(_)) | Ok(Ok(Err(_))) => Err(PDF_TEXT_ERROR.to_owned()),
+        Ok(Ok(Ok(text))) => Ok(text),
+    }
 }
 
-/// Fetch and extract one PDF's text (see [`pdf_text`] for the ported gap).
+/// Fetch and extract one PDF's text.
 pub async fn fetch_pdf_text(
     client: &PublicClient,
     path: &str,
     not_found: &str,
 ) -> Result<String, String> {
     let data = fetch_pdf(client, path, not_found, None).await?;
-    pdf_text(&data)
+    pdf_text(data).await
+}
+
+/// Every page's text, no page cap and no wall clock — the ELI consolidated-PDF path, which
+/// matches the reference's `eli._pdf_text` (its own thread, `pdf_to_text` with no page limit).
+pub async fn pdf_full_text(data: Vec<u8>) -> Result<String, String> {
+    match tokio::task::spawn_blocking(move || crate::pdf::full_text(&data)).await {
+        Ok(Ok(text)) => Ok(text),
+        Ok(Err(_)) | Err(_) => Err(PDF_TEXT_ERROR.to_owned()),
+    }
 }
 
 // ── the process-wide TTL caches (the reference's cachetools TTLCache) ──────────────────────

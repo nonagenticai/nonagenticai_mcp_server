@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **PDF text extraction for the three PDF-reading legal tools.** `src/pdf/` reproduces the
+  reference's pypdf-based `pdf_text.py`: the visitor flush semantics, font decoding (named
+  encodings, `/Differences`, `/ToUnicode`, Type0/Identity-H), the superscript and bracketed
+  article rules, and `cut_article` for the ELI consolidated PDF. `legal_eli_act_text`,
+  `legal_duw_document` and `legal_uokik_document` now return the document's text instead of a
+  permanent refusal; a real published act is a checked-in parity fixture. The ELI path keeps the
+  reference's parsed-PDF cache (eight paths, a day), and a crafted nesting depth is refused as
+  the reference's `RecursionError` is, never by exhausting the stack.
+
 - **One success log line per finished run**: `WorkerStore::finish` logs the run id, tenant,
   runtime and the status it actually wrote, so every finish path (the worker controller,
   recovery's interrupts, the external driver) has exactly one line; inputs, results and
