@@ -219,7 +219,9 @@ impl N8nAdapter {
             .and_then(last)
             .and_then(|value| value.get("data"))
             .and_then(|value| value.get("main"))
-            .and_then(last)
+            // `main[0][-1]`: the FIRST output branch, its LAST item. Not `main[-1]` — a node
+            // with several branches would otherwise answer with a different branch's item.
+            .and_then(first)
             .and_then(last)
             .and_then(|value| value.get("json"));
         let Some(result) = result else {
@@ -428,4 +430,9 @@ fn truthy(value: &Value) -> bool {
 /// The last element of a JSON array, or nothing (the reference's `[-1]`).
 fn last(value: &Value) -> Option<&Value> {
     value.as_array().and_then(|items| items.last())
+}
+
+/// The first item of a JSON array.
+fn first(value: &Value) -> Option<&Value> {
+    value.as_array().and_then(|items| items.first())
 }

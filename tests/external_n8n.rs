@@ -675,3 +675,38 @@ async fn handle(State(stub): State<Stub>, request: Request) -> Response {
         .expect("a queued reply");
     (reply.status, reply.body).into_response()
 }
+
+/// `main[0][-1]`: the FIRST output branch, its LAST item. A node with more than one output
+/// branch must answer from branch 0 — indexing `main[-1]` would silently return another
+/// branch's item, which no one-element fixture can catch.
+#[tokio::test]
+async fn the_result_comes_from_the_first_output_branch() {
+    let (base, server) = local_server().await;
+    let payload = json!({
+        "status": "success",
+        "data": {
+            "resultData": {
+                "runData": {
+                    "MCP Result": [{
+                        "data": {
+                            "main": [
+                                [{ "json": { "branch": 0 } }, { "json": { "branch": "first-last" } }],
+                                [{ "json": { "branch": "second-branch" } }]
+                            ]
+                        }
+                    }]
+                }
+            }
+        }
+    });
+    server.reply(
+        StatusCode::OK,
+        serde_json::to_vec(&payload).expect("a payload"),
+    );
+    let adapter = N8nAdapter::new(client(), api_settings(Some(&base), Some(API_KEY), 10));
+    let state = adapter.poll(&parked_row()).await.expect("a poll");
+    assert_eq!(
+        state,
+        ExternalState::succeeded(Some(json!({ "branch": "first-last" })))
+    );
+}

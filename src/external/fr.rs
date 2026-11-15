@@ -85,12 +85,26 @@ static PROJECT_TYPE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9_-]{1,128}$").expect("project type pattern"));
 
 /// The fr settings the adapter reads: the backend base and the channel HMAC key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FrSettings {
     /// `MCP_FR_BASE_URL`: the fr backend base.
     pub base_url: Option<String>,
     /// `MCP_FR_CHANNEL_SECRET`: the HMAC key every channel message is signed with. Never logged.
     pub channel_secret: Option<String>,
+}
+
+/// The channel secret is a secret: a stray `?settings` must not print it.
+impl std::fmt::Debug for FrSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FrSettings")
+            .field("base_url", &self.base_url)
+            .field(
+                "channel_secret",
+                &self.channel_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl From<&ExternalDriverSettings> for FrSettings {
@@ -339,6 +353,39 @@ impl SendError {
     }
 }
 
+/// Python's `json.dumps(..., ensure_ascii=True)`: every non-ASCII character becomes a
+/// `\uXXXX` escape (lowercase hex), and an astral character becomes its UTF-16 surrogate pair.
+///
+/// Applied to already-serialised JSON, which is safe: JSON's syntax is ASCII, so the only
+/// characters above 0x7F sit inside string literals, where an escape is exactly equivalent.
+fn python_ensure_ascii(encoded: &str) -> String {
+    let mut out = String::with_capacity(encoded.len());
+    for character in encoded.chars() {
+        if (character as u32) < 0x80 {
+            out.push(character);
+            continue;
+        }
+        let mut units = [0u16; 2];
+        for unit in character.encode_utf16(&mut units) {
+            out.push_str(&format!("\\u{unit:04x}"));
+        }
+    }
+    out
+}
+
+/// A failed channel message on the **start** path.
+///
+/// The reference catches only fr's answered refusal and an HTTP status here: a transport failure
+/// escapes `start` into the driver's generic handler, which finishes the run `interrupted`
+/// (`external_start_unknown`) because the message may have reached fr. That is why
+/// [`SendError::Unavailable`] is [`ExternalStartError::unknown`] and not a code.
+fn start_error(error: SendError) -> ExternalStartError {
+    match error {
+        SendError::Unavailable => ExternalStartError::unknown(),
+        other => ExternalStartError::new(other.code()),
+    }
+}
+
 /// The fr project adapter: one project start per run, polled by project id.
 #[derive(Debug, Clone)]
 pub struct FrAdapter {
@@ -395,8 +442,12 @@ impl FrAdapter {
                 envelope.insert(key.to_owned(), value.clone());
             }
         }
-        let body = serde_json::to_vec(&envelope)
+        // The envelope is `json.dumps(envelope, separators=(",", ":"), sort_keys=True)` — note
+        // the DEFAULT `ensure_ascii=True`, unlike the `projects.create` text inside it. Python
+        // therefore escapes every non-ASCII character, and the signature is over those bytes.
+        let encoded = serde_json::to_string(&envelope)
             .map_err(|_| SendError::Refused("external_result_invalid".to_owned()))?;
+        let body = python_ensure_ascii(&encoded).into_bytes();
         let secret = self.secret.as_deref().unwrap_or_default();
         let mut headers = sign(&body, secret, unix_now());
         headers.insert("Content-Type".to_owned(), "application/json".to_owned());
@@ -472,7 +523,7 @@ impl ExternalAdapter for FrAdapter {
         let data = self
             .send(&actor, &text, &row.run.run_id.to_string())
             .await
-            .map_err(|error| ExternalStartError::new(error.code()))?;
+            .map_err(start_error)?;
         let status = data.get("status").and_then(Value::as_str);
         let approval = (status == Some("pending-approval"))
             .then(|| data.get("approvalId").and_then(Value::as_str))
@@ -673,7 +724,7 @@ impl ExternalAdapter for FrCommandAdapter {
             .inner
             .send(&actor, &text, &row.run.run_id.to_string())
             .await
-            .map_err(|error| ExternalStartError::new(error.code()))?;
+            .map_err(start_error)?;
         if data.get("status").and_then(Value::as_str) != Some("result") {
             return Err(ExternalStartError::new("external_result_invalid"));
         }

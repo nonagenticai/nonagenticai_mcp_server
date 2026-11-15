@@ -661,7 +661,7 @@ impl WorkerSettings {
 /// Env names carry the reference's `MCP_` prefix; the three fr advisory settings keep their
 /// unprefixed names because the reference gives them an explicit `validation_alias`, which
 /// overrides pydantic's `env_prefix`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ExternalDriverSettings {
     /// The worker settings the driver shares with the Kata executor.
     pub worker: WorkerSettings,
@@ -694,6 +694,31 @@ pub struct ExternalDriverSettings {
     pub fr_base_url: Option<String>,
     /// `MCP_FR_CHANNEL_SECRET`: the HMAC key every channel message is signed with. Never logged.
     pub fr_channel_secret: Option<String>,
+}
+
+/// Three of this struct's fields are secrets, so the hands-off `Debug` is written by hand: a
+/// stray `?settings` (or `tracing::debug!(?settings)`) must not print them.
+impl std::fmt::Debug for ExternalDriverSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redacted = |value: &Option<String>| value.as_ref().map(|_| "<redacted>");
+        formatter
+            .debug_struct("ExternalDriverSettings")
+            .field("worker", &self.worker)
+            .field("execution", &self.execution)
+            .field("execution_enabled", &self.execution_enabled)
+            .field("run_max", &self.run_max)
+            .field("active_max", &self.active_max)
+            .field("concurrency", &self.concurrency)
+            .field("probe_port", &self.probe_port)
+            .field("n8n_base_url", &self.n8n_base_url)
+            .field("n8n_webhook_base_url", &self.n8n_webhook_base_url)
+            .field("n8n_api_key", &redacted(&self.n8n_api_key))
+            .field("n8n_webhook_secret", &redacted(&self.n8n_webhook_secret))
+            .field("n8n_unknown_status_limit", &self.n8n_unknown_status_limit)
+            .field("fr_base_url", &self.fr_base_url)
+            .field("fr_channel_secret", &redacted(&self.fr_channel_secret))
+            .finish()
+    }
 }
 
 impl Default for ExternalDriverSettings {

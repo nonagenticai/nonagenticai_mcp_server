@@ -34,8 +34,7 @@ use crate::external::health::Liveness;
 use crate::external::n8n::N8nAdapter;
 use crate::external::store::ExternalStore;
 use crate::external::{
-    AdapterError, AnswerForwarder, ExternalAdapter, ExternalStartError, ExternalState,
-    ExternalStatus,
+    AdapterError, AnswerForwarder, ExternalAdapter, ExternalState, ExternalStatus,
 };
 use crate::storage::run_activity;
 use crate::storage::task_inputs::{REFUSED_PREFIX, TaskInputRepository};
@@ -234,8 +233,14 @@ impl ExternalDriver {
         match self.renewing(row, adapter.start(row)).await {
             // Another driver owns the run; it will start or recover it.
             Renewal::Lost => {}
-            Renewal::Done(Err(ExternalStartError { code })) => {
-                self.finish(row, "failed", None, Some(&code)).await;
+            // The upstream may have the work (a transport failure after the request was sent):
+            // `interrupted`, never `failed`, and never re-sent.
+            Renewal::Done(Err(error)) if error.outcome_unknown => {
+                self.finish(row, "interrupted", None, Some(&error.code))
+                    .await;
+            }
+            Renewal::Done(Err(error)) => {
+                self.finish(row, "failed", None, Some(&error.code)).await;
             }
             Renewal::Done(Ok(reference)) => {
                 if let Err(error) = self.store.record_started(row, &reference.stored()).await {
@@ -379,6 +384,11 @@ impl ExternalDriver {
                     return;
                 };
                 let message = truncate(&message, MESSAGE_LIMIT);
+                // The reference's falsy check: an empty progress text writes nothing — it must
+                // not clear a standing message or append an empty feed row.
+                if message.is_empty() {
+                    return;
+                }
                 match self.store.set_status_message(row, &message).await {
                     // A new phase is one feed row. When the update was refused (an answer-again
                     // hint stands) nothing is recorded, so a hint never floods the feed.

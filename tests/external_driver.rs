@@ -709,3 +709,41 @@ async fn a_refused_answer_reopens_the_input_with_the_refusal() {
     );
     fixture.finish().await;
 }
+
+/// The reference's falsy check on the progress text: an empty message writes nothing — it must
+/// not clear a standing status message, and it must not append an empty feed row.
+#[tokio::test]
+async fn an_empty_progress_text_writes_nothing() {
+    let fixture = Fixture::new().await;
+    binding_fixture(&fixture).await;
+    let fake = Fake::new();
+    let driver = driver(&fixture, Arc::clone(&fake), settings(), None);
+    let run = seed_run(
+        &fixture.pool,
+        "running",
+        "n8n_workflow",
+        Some(driver.driver_id()),
+        1,
+        30,
+        600,
+        false,
+    )
+    .await;
+    fake.with_polls(vec![Poll::State(ExternalState::running_with(""))]);
+
+    driver.tick().await.expect("tick");
+
+    let message: Option<String> =
+        sqlx::query_scalar("SELECT status_message FROM public.mcp_runs WHERE run_id = $1::uuid")
+            .bind(&run)
+            .fetch_one(&fixture.pool)
+            .await
+            .expect("status message");
+    assert_eq!(message, None);
+    assert!(
+        !activity_kinds(&fixture.pool, &run)
+            .await
+            .contains(&"phase".to_owned())
+    );
+    fixture.finish().await;
+}

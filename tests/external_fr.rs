@@ -924,3 +924,69 @@ fn settings_read_the_driver_configuration() {
     assert_eq!(settings.channel_secret.as_deref(), Some(SECRET));
     assert!(FrAdapter::new(reqwest::Client::new(), settings).configured());
 }
+
+// ── the two start outcomes the reference distinguishes ───────────────────────────────────
+
+/// A transport failure is NOT a refusal: the message may have reached fr, so the run is
+/// `interrupted` (`external_start_unknown`), never `failed`. The reference lets it escape
+/// `start` into the driver's generic handler for exactly this reason.
+#[tokio::test]
+async fn a_transport_failure_on_start_is_an_unknown_outcome() {
+    // Port 1 is closed: connecting fails before anything can be delivered.
+    let adapter = FrAdapter::new(reqwest::Client::new(), settings("http://127.0.0.1:1"));
+    let row = worker_row(
+        RUN,
+        TENANT,
+        json!({ "title": "Synthetic project" }),
+        Some(agent()),
+        project_authority(),
+        None,
+        RunStatus::Starting,
+    );
+    let error = adapter.start(&row).await.expect_err("transport failure");
+    assert!(
+        error.outcome_unknown,
+        "a transport failure may have been delivered: {error:?}"
+    );
+    assert_eq!(error.code, "external_start_unknown");
+}
+
+/// The envelope is `json.dumps(..., sort_keys=True)` with Python's DEFAULT `ensure_ascii=True`,
+/// so a non-ASCII character travels escaped and the signature is over those bytes. (The
+/// `projects.create` text inside it is `ensure_ascii=False`, which is why only the envelope
+/// escapes.)
+#[tokio::test]
+async fn the_envelope_escapes_non_ascii_like_the_reference() {
+    let server = TestServer::start(vec![(
+        StatusCode::OK,
+        json!({ "status": "pending-approval", "approvalId": PROJECT }),
+    )])
+    .await;
+    let adapter = FrAdapter::new(reqwest::Client::new(), server.settings());
+    let row = worker_row(
+        RUN,
+        TENANT,
+        json!({ "title": "café ☕" }),
+        Some(agent()),
+        project_authority(),
+        None,
+        RunStatus::Starting,
+    );
+    adapter.start(&row).await.expect("start");
+
+    let body = &server.requests()[0].body;
+    let text = String::from_utf8(body.clone()).expect("the envelope is ASCII on the wire");
+    assert!(
+        text.contains("caf\\u00e9 \\u2615"),
+        "the envelope escapes non-ASCII: {text}"
+    );
+    // The text inside the envelope is `ensure_ascii=False`, so it is escaped by the envelope
+    // pass only — never twice, and never left raw on the wire.
+    assert!(!text.contains("café"), "{text}");
+    // What fr receives still decodes to the same value.
+    let envelope: Value = serde_json::from_slice(body).expect("envelope json");
+    assert_eq!(
+        envelope["text"],
+        json!("projects.create {\"title\":\"café ☕\",\"project_type\":\"it\"}")
+    );
+}

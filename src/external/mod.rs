@@ -170,18 +170,37 @@ impl ExternalState {
     }
 }
 
-/// The external system refused or could not start the run; nothing is running there.
+/// A start could not complete.
+///
+/// Two outcomes, and the difference is the whole at-most-once contract: a **refusal** means
+/// nothing is running upstream (the run is `failed` with the public code), while an **unknown**
+/// outcome means the request may have reached the system (the run is `interrupted`, and recovery
+/// never re-sends it). The reference draws the same line by letting a transport error escape
+/// `start` into the driver's generic handler.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{code}")]
 pub struct ExternalStartError {
     /// The public failure code (`^[a-z_]{1,64}$`).
     pub code: String,
+    /// The request may have reached the upstream: finish the run `interrupted`, never `failed`.
+    pub outcome_unknown: bool,
 }
 
 impl ExternalStartError {
-    /// A start refusal with a public code.
+    /// A start refusal with a public code: nothing is running upstream.
     pub fn new(code: impl Into<String>) -> Self {
-        Self { code: code.into() }
+        Self {
+            code: code.into(),
+            outcome_unknown: false,
+        }
+    }
+
+    /// The upstream may have the work: the outcome is unknown.
+    pub fn unknown() -> Self {
+        Self {
+            code: "external_start_unknown".to_owned(),
+            outcome_unknown: true,
+        }
     }
 }
 
