@@ -19,7 +19,7 @@ use rmcp::model::{CallToolResult, ContentBlock, Tool};
 use serde_json::{Map, Value};
 
 use crate::catalog::instance::{InstanceError, validate_instance};
-use crate::catalog::validation::SchemaLimits;
+use crate::catalog::validation::{ARRAYS, MAPS, SINGLE, SUPPORTED, SchemaLimits};
 
 use super::audit::{self, AuditSink};
 use super::scope::{self, BuiltinCaller};
@@ -174,7 +174,7 @@ impl BuiltinProvider {
             return error_result(&text);
         };
 
-        let schema = Value::Object(tool.input_schema.clone());
+        let schema = validation_view(&Value::Object(tool.input_schema.clone()));
         let instance = Value::Object(arguments.clone());
         if let Err(error) = validate_instance(&schema, &instance, &SchemaLimits::default()) {
             let text = invalid_arguments(&error);
@@ -220,6 +220,51 @@ impl BuiltinProvider {
             }
         }
     }
+}
+
+/// The declared schema reduced to the keywords this crate's instance validator implements.
+///
+/// The reference validates builtin arguments with `jsonschema`, which has the whole draft. This
+/// crate's validator is the closed subset the catalog authoring path promises
+/// ([`SUPPORTED`]) and it refuses any other keyword outright, so a declared schema carrying one
+/// — the pinned builder family's FastMCP-generated schemas carry `pattern` — would be refused
+/// before the handler ran. The provider therefore validates a structural copy stripped of those
+/// keywords: object shape, types, required names, bounds and the supported combinators are
+/// still enforced, while the listed schema stays the reference's byte for byte. Every dropped
+/// rule is either inexpressible here or re-checked by the tool itself (the builder parses its
+/// keys, effects and identities through typed models), so a refusal still fails closed.
+fn validation_view(node: &Value) -> Value {
+    let Value::Object(map) = node else {
+        return node.clone();
+    };
+    let mut reduced_map = Map::new();
+    for (keyword, value) in map {
+        if !SUPPORTED.contains(&keyword.as_str()) {
+            continue;
+        }
+        let reduced = if MAPS.contains(&keyword.as_str()) {
+            match value {
+                Value::Object(children) => Value::Object(
+                    children
+                        .iter()
+                        .map(|(name, schema)| (name.clone(), validation_view(schema)))
+                        .collect(),
+                ),
+                other => other.clone(),
+            }
+        } else if SINGLE.contains(&keyword.as_str()) {
+            validation_view(value)
+        } else if ARRAYS.contains(&keyword.as_str()) {
+            match value {
+                Value::Array(items) => Value::Array(items.iter().map(validation_view).collect()),
+                other => other.clone(),
+            }
+        } else {
+            value.clone()
+        };
+        reduced_map.insert(keyword.clone(), reduced);
+    }
+    Value::Object(reduced_map)
 }
 
 /// The reference's `_error(text)`.
@@ -342,6 +387,47 @@ mod tests {
         let text = result.content[0].as_text().unwrap().text.clone();
         assert!(text.starts_with("invalid arguments: "), "{text}");
         assert!(!text.contains("secret"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_declared_pattern_is_listed_and_the_closed_subset_still_checks_the_shape() {
+        // The pinned builder schemas carry `pattern`, which the authoring validator's closed
+        // subset refuses; the provider validates a reduced copy, never the listed schema.
+        let declared = serde_json::json!({
+            "type": "object",
+            "properties": {"key": {"type": "string", "pattern": "^[a-z]+$"}},
+            "required": ["key"],
+            "additionalProperties": false,
+        });
+        let mut provider = BuiltinProvider::new();
+        provider.register(BuiltinTool::new(
+            "builder",
+            "probe",
+            "p",
+            declared.as_object().cloned().expect("a schema object"),
+            echo(),
+        ));
+
+        let listed = provider.list(&caller("licence:mcp"));
+        assert_eq!(
+            listed[0].input_schema["properties"]["key"]["pattern"],
+            serde_json::json!("^[a-z]+$"),
+            "the listed schema stays the reference's"
+        );
+
+        let mut wrong = Map::new();
+        wrong.insert("key".to_owned(), Value::from(1));
+        let refused = provider
+            .call(&caller("licence:mcp"), "builder_probe", wrong)
+            .await;
+        assert_eq!(refused.is_error, Some(true));
+        assert!(
+            refused.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .starts_with("invalid arguments: ")
+        );
     }
 
     #[tokio::test]

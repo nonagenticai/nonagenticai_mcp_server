@@ -52,6 +52,10 @@ fn repository(fixture: &Fixture) -> SourceRepository {
         fixture.pool.clone(),
         &SourceSettings {
             secret_key: Some(secret_key().to_vec()),
+            secret_key_text: Some({
+                use base64::Engine as _;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret_key())
+            }),
             allowed_hosts: vec!["api.example.test".to_owned()],
         },
     )

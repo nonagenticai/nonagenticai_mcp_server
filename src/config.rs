@@ -133,6 +133,9 @@ impl Config {
 pub struct SourceSettings {
     /// The 32-byte key from `MCP_SOURCE_SECRET_KEY` (base64url, padded or unpadded).
     pub secret_key: Option<Vec<u8>>,
+    /// The same key as configured: [`crate::worker::sources::SourceRegistry`] decodes it itself
+    /// (the builder's tenant-source path), and both readers must see the identical text.
+    pub secret_key_text: Option<String>,
     /// `MCP_SOURCE_ALLOWED_HOSTS`: exact hosts, `*.suffix` patterns, or `host:port` entries.
     /// An empty allow-list allows nothing — the reference's `host_allowed` semantics.
     pub allowed_hosts: Vec<String>,
@@ -146,13 +149,15 @@ impl SourceSettings {
     /// Testable core of [`SourceSettings::from_env`]. Empty values count as unset.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
-        let secret_key = match get("MCP_SOURCE_SECRET_KEY") {
+        let secret_key_text = get("MCP_SOURCE_SECRET_KEY");
+        let secret_key = match &secret_key_text {
             None => None,
-            Some(value) => Some(decode_source_key(&value)?),
+            Some(value) => Some(decode_source_key(value)?),
         };
         let allowed_hosts = split_source_hosts(get("MCP_SOURCE_ALLOWED_HOSTS"))?;
         Ok(Self {
             secret_key,
+            secret_key_text,
             allowed_hosts,
         })
     }
@@ -233,6 +238,20 @@ pub struct BuilderSettings {
     /// `MCP_BUILDER_DENY_CIDRS` (comma-separated, at most 64, default empty): extra networks the
     /// tenant egress must refuse beyond the non-global addresses it always refuses.
     pub deny_cidrs: Vec<String>,
+    /// `MCP_BUILDER_OAUTH_TOKEN_MAX_TTL` (30 to 86400 seconds, default 3600): the longest an
+    /// OAuth token the tool builder obtains may be reused — the worker's setting, read here
+    /// because the API's builder fetches documents itself.
+    pub oauth_token_max_ttl: Duration,
+    /// `MCP_RUN_MAX_SECONDS` (1 to 300, default 60): the wall-clock ceiling a draft run's own
+    /// limit is narrowed to (the worker's setting; only the builder's draft admission reads it).
+    pub run_max: Duration,
+    /// `MCP_MAX_API_CALLS_PER_RUN` (0 to 100, default 10): the call ceiling a draft run's own
+    /// limit is narrowed to.
+    pub max_api_calls_per_run: u32,
+    /// `MCP_CREDENTIAL_BUNDLE_FILE` (optional): the mounted per-tenant credential bundle the
+    /// builder's licence-kind sources mint from. Absent in the API deployment today: those
+    /// sources then refuse, exactly as a worker without a credential source does.
+    pub credential_bundle_file: Option<PathBuf>,
 }
 
 impl Default for BuilderSettings {
@@ -249,6 +268,10 @@ impl Default for BuilderSettings {
             test_runs_per_hour: 60,
             allowed_ports: vec![443],
             deny_cidrs: Vec::new(),
+            oauth_token_max_ttl: Duration::from_secs(3600),
+            run_max: Duration::from_secs(60),
+            max_api_calls_per_run: 10,
+            credential_bundle_file: None,
         }
     }
 }
@@ -294,6 +317,16 @@ impl BuilderSettings {
             test_runs_per_hour: u64_setting(&get, "MCP_BUILDER_TEST_RUNS_PER_HOUR", 60, 1, 10_000)?,
             allowed_ports: builder_ports(get("MCP_BUILDER_ALLOWED_PORTS"))?,
             deny_cidrs: builder_deny_cidrs(get("MCP_BUILDER_DENY_CIDRS"))?,
+            oauth_token_max_ttl: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_BUILDER_OAUTH_TOKEN_MAX_TTL",
+                3_600,
+                30,
+                86_400,
+            )?),
+            run_max: Duration::from_secs(u64_setting(&get, "MCP_RUN_MAX_SECONDS", 60, 1, 300)?),
+            max_api_calls_per_run: u32_setting(&get, "MCP_MAX_API_CALLS_PER_RUN", 10, 0, 100)?,
+            credential_bundle_file: get("MCP_CREDENTIAL_BUNDLE_FILE").map(PathBuf::from),
         };
         // Shape rules only: the licence cross-check needs `MCP_LICENSE_APP_KEY`, which this
         // parser does not read (it lives with the authentication settings). `Config::from_lookup`

@@ -52,6 +52,14 @@ pub struct Auth {
     pub bindings: Arc<dyn BindingAuthority>,
     /// `MCP_MAX_MANAGEMENT_BYTES`: the bound on a buffered management request body.
     pub max_management_bytes: usize,
+    /// `MCP_LICENSE_APP_KEY`: the application key a tenant's own licence carries — the tool
+    /// builder's author credential when it is enabled (`auth/protocol.py:113-125`).
+    pub license_app_key: Option<String>,
+    /// `MCP_BUILDER_ENABLED`: whether a tenant-level `mcp` licence with no binding is the
+    /// builder's author. Off, that licence is the reference's 401 "binding required".
+    pub builder_enabled: bool,
+    /// The reserved platform tenant, which never authors through the builder (403).
+    pub platform_tenant_id: Rfc4122Uuid,
 }
 
 impl Auth {
@@ -84,7 +92,18 @@ impl Auth {
             // requests fail closed.
             bindings: Arc::new(UnavailableBindings),
             max_management_bytes: config.max_management_bytes,
+            license_app_key: config.license_app_key.clone(),
+            builder_enabled: false,
+            platform_tenant_id: crate::config::default_platform_tenant_id(),
         })
+    }
+
+    /// The composition root's builder facts: whether `MCP_BUILDER_ENABLED` is on and which
+    /// tenant is the platform's. Everything else was already read from the same settings.
+    pub fn with_builder(mut self, enabled: bool, platform_tenant_id: Rfc4122Uuid) -> Self {
+        self.builder_enabled = enabled;
+        self.platform_tenant_id = platform_tenant_id;
+        self
     }
 
     /// Replace the binding authority (the storage slice's seam; tests use a fake).

@@ -151,6 +151,18 @@ impl BuilderRuntime {
         }
     }
 
+    /// Whether the enabled runtime is installed: both mounts are served instead of the
+    /// reference's `404 not_found`. Startup logs it, and a wiring test asserts it.
+    pub fn installed(&self) -> bool {
+        self.service.is_some()
+    }
+
+    /// The installed service, when the builder is enabled — the handle the composition root
+    /// threads to the `builder_*` builtin tools, so both surfaces act through one service.
+    pub fn service_handle(&self) -> Option<Arc<BuilderService>> {
+        self.service.clone()
+    }
+
     /// The service, when the builder is installed. The middleware has already answered the
     /// disabled case, so this refusal is only a wiring-fault fallback.
     fn service(&self) -> Result<&BuilderService, BuilderError> {

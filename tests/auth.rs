@@ -792,6 +792,95 @@ async fn an_mcp_licence_without_a_binding_is_refused() {
     assert_unauthorized(status, &headers, &body);
 }
 
+/// The reserved platform tenant, which never authors through the builder.
+const PLATFORM_TENANT: &str = "01900000-0000-7000-8000-00000000f001";
+
+#[tokio::test]
+async fn a_tenant_author_licence_is_the_builders_caller_when_enabled() {
+    // The reference's `builder_caller` (`auth/protocol.py:163-181`): a tenant-level mcp licence,
+    // no binding, `/mcp` only, never the platform tenant.
+    let authority = authority(active_licence("mcp", TENANT, "tenant")).await;
+    let app = probe(
+        auth(&config(Some(&authority.url), None, None)).with_builder(
+            true,
+            Rfc4122Uuid::parse(PLATFORM_TENANT).expect("platform tenant"),
+        ),
+    );
+    let (status, _, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["binding_id"], Value::Null);
+    assert_eq!(body["licence"]["app"], json!("mcp"));
+    assert_eq!(body["licence"]["subject_kind"], json!("tenant"));
+}
+
+#[tokio::test]
+async fn a_member_mcp_licence_is_refused_even_when_the_builder_is_enabled() {
+    let authority = authority(active_licence("mcp", TENANT, "member")).await;
+    let app = probe(
+        auth(&config(Some(&authority.url), None, None)).with_builder(
+            true,
+            Rfc4122Uuid::parse(PLATFORM_TENANT).expect("platform tenant"),
+        ),
+    );
+    let (status, headers, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_unauthorized(status, &headers, &body);
+}
+
+#[tokio::test]
+async fn the_platform_tenant_never_authors_through_the_builder() {
+    let authority = authority(active_licence("mcp", PLATFORM_TENANT, "tenant")).await;
+    let app = probe(
+        auth(&config(Some(&authority.url), None, None)).with_builder(
+            true,
+            Rfc4122Uuid::parse(PLATFORM_TENANT).expect("platform tenant"),
+        ),
+    );
+    let (status, _, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body, json!({ "error": "forbidden" }));
+}
+
+#[tokio::test]
+async fn a_tenant_author_may_only_call_the_protocol_path() {
+    let authority = authority(active_licence("mcp", TENANT, "tenant")).await;
+    let app = probe(
+        auth(&config(Some(&authority.url), None, None)).with_builder(
+            true,
+            Rfc4122Uuid::parse(PLATFORM_TENANT).expect("platform tenant"),
+        ),
+    );
+    let (status, _, body) = call(
+        app,
+        Request::post("/mcp/available-tools")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
 #[tokio::test]
 async fn a_builtin_caller_needs_x_tenant_id_not_authorization() {
     // `Authorization` is never a licence candidate for a non-binding caller: only

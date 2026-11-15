@@ -17,7 +17,7 @@ use mcp_server_rs::config::{AuthConfig, Config};
 use mcp_server_rs::error::StartupError;
 use mcp_server_rs::platform::seed::{self as platform_seed, SeedOptions, SeedReport, SeedSettings};
 use mcp_server_rs::platform::toolkit_source::load_all;
-use mcp_server_rs::{AppState, app, db, grant, openapi, telemetry};
+use mcp_server_rs::{AppState, auth, db, grant, openapi, routes, telemetry};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -258,21 +258,8 @@ async fn serve() -> Result<(), StartupError> {
     }
     tracing::info!("migrations applied");
 
-    // `MCP_BUILDER_ENABLED=true` is refused rather than half-served: the builder's routes and
-    // service are complete, but this binary's composition root still mounts the reference's
-    // disabled runtime — the service needs the broker's pinned-egress fetcher, adapter set and
-    // credential resolver, which live in the worker's settings, not the API's. A deployment
-    // that sets the flag must not silently get a 404 for every builder path. The live
-    // deployment leaves it unset (the reference's default), so this refuses nothing today.
-    if cfg.builder.enabled {
-        return Err(mcp_server_rs::error::StartupError::Config(
-            mcp_server_rs::config::ConfigError::Invalid {
-                name: "MCP_BUILDER_ENABLED",
-                reason: "the builder composition is not wired into the API binary yet".into(),
-            },
-        ));
-    }
-
+    // `MCP_BUILDER_ENABLED` installs the builder (`asgi.py:125`); with the flag off the app
+    // keeps the reference's disabled runtime — a 404 on both mounts before any credential.
     // The reference refuses startup when a platform pool is configured without platform
     // authorization (`src/config.py:314`); a pool nobody may use is a misconfiguration, not a
     // feature. The same rule holds here, before the listener exists.
@@ -294,22 +281,32 @@ async fn serve() -> Result<(), StartupError> {
 
     let listener = TcpListener::bind(cfg.bind_addr).await?;
     tracing::info!(addr = %listener.local_addr()?, "listening");
+    let state = AppState {
+        pool,
+        execution_enabled: cfg.execution_enabled,
+        license_app_key: auth_config.license_app_key.clone(),
+        approved_runner_images: cfg.approved_runner_images.clone(),
+        platform_tenant_id: cfg.platform_tenant_id,
+        catalog_page_size: cfg.catalog_page_size,
+        platform,
+        sources: cfg.sources.clone(),
+        execution: cfg.execution.clone(),
+    };
+    // The middleware and the internal runtime are the same values `app()` would build; the
+    // builder needs them too, so they are built once here and the application is assembled with
+    // whichever builder runtime the flag selects.
+    let auth = auth::Auth::from_config(&auth_config)?
+        .with_builder(cfg.builder.enabled, cfg.platform_tenant_id);
+    let internal = routes::internal::InternalRuntime::from_config(&state, &auth, &auth_config)?;
+    let builder = if cfg.builder.enabled {
+        mcp_server_rs::builder::compose::runtime(&cfg, &auth_config, &auth, &state)?
+    } else {
+        mcp_server_rs::routes::builder::BuilderRuntime::disabled(&state, &auth)
+    };
+    tracing::info!(installed = builder.installed(), "tool builder");
     axum::serve(
         listener,
-        app(
-            AppState {
-                pool,
-                execution_enabled: cfg.execution_enabled,
-                license_app_key: auth_config.license_app_key.clone(),
-                approved_runner_images: cfg.approved_runner_images.clone(),
-                platform_tenant_id: cfg.platform_tenant_id,
-                catalog_page_size: cfg.catalog_page_size,
-                platform,
-                sources: cfg.sources.clone(),
-                execution: cfg.execution.clone(),
-            },
-            &auth_config,
-        )?,
+        mcp_server_rs::app_with_builder(state, auth, internal, builder),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;

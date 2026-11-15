@@ -38,6 +38,7 @@
 //!   and it refuses the `NaN`/`Infinity` literals and out-of-range numbers Python's `json`
 //!   accepts, so those documents are refused as "not JSON" rather than per operation.
 
+pub mod compose;
 pub mod models;
 pub mod openapi;
 pub mod packaging;
