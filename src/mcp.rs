@@ -22,7 +22,9 @@
 //! every call the reference's `[permanent] tool not permitted for this caller`. A principal
 //! with a binding keeps the catalog path unchanged. A management principal is an AUTHORITY
 //! even without a binding, so it stays on the catalog path exactly as the reference's
-//! `current_authority()` does.
+//! `current_authority()` does. A builtin `tools/call` also carries the request's
+//! `X-Strata-Token` — a licence caller's own strata-rag licence — on the builtin caller, where
+//! `faq_ask` forwards it to strata_rag; it is never rendered.
 //!
 //! One known divergence: `rmcp`'s typed [`CallToolRequestParams`] drops unknown top-level keys,
 //! so the reference's "unsupported call extension" refusal (`src/protocol.py:158-161`) cannot
@@ -302,7 +304,8 @@ impl McpServer {
             let Some(provider) = self.builtin.as_ref() else {
                 return Ok(call_refusal(DENIED_MESSAGE));
             };
-            let caller = BuiltinCaller::from_principal(&principal);
+            let caller = BuiltinCaller::from_principal(&principal)
+                .with_strata_token(forwarded_strata_token(parts));
             let arguments = request.arguments.clone().unwrap_or_default();
             return Ok(CallToolResponse::Complete(
                 provider
@@ -646,6 +649,39 @@ fn caller(context: &RequestContext<RoleServer>) -> Result<Principal, McpError> {
         .and_then(|parts| parts.extensions.get::<Principal>())
         .cloned()
         .ok_or_else(|| McpError::internal_error("no caller authority on the request", None))
+}
+
+/// The care-bus tenant's own strata-rag licence, forwarded on `/mcp`.
+const STRATA_TOKEN_HEADER: &str = "x-strata-token";
+/// The reference `bearer()` bound on one authentication header (`maximum=4103`).
+const STRATA_TOKEN_MAX_BYTES: usize = 4103;
+
+/// The reference's `bearer(scope, b"x-strata-token")`: the caller's forwarded strata-rag
+/// licence, read from the request the way HTTP delivered it — the header name is
+/// case-insensitive, and a leading `Bearer ` is stripped. A duplicate, empty or over-long
+/// value is `None`, exactly as the reference drops the `bearer()` that raises; a licence
+/// caller left without one is refused by `faq_ask`, never served from the pinned tenant.
+fn forwarded_strata_token(parts: &Parts) -> Option<String> {
+    let mut values = parts.headers.get_all(STRATA_TOKEN_HEADER).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    // The reference's `bearer()` byte rule: 1..=4103 printable ASCII. `to_str` admits a tab,
+    // which the rule rejects, so the bytes are checked here too.
+    let raw = value.to_str().ok()?;
+    if raw.is_empty()
+        || raw.len() > STRATA_TOKEN_MAX_BYTES
+        || !raw.bytes().all(|byte| (32..=126).contains(&byte))
+    {
+        return None;
+    }
+    let text = raw.trim();
+    let text = match text.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("bearer ") => text[7..].trim(),
+        _ => text,
+    };
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// SEP-2663: every `tasks/*` call requires the client to have declared the extension. rmcp

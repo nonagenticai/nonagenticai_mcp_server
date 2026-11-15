@@ -269,6 +269,7 @@ mod tests {
             scope: scope.to_owned(),
             tenant_id: None,
             license_id: None,
+            strata_token: None,
         }
     }
 

@@ -15,6 +15,8 @@
 //! Binding principals never reach this table: they see catalog tools only. In this service the
 //! caller identity is derived from the authenticated [`Principal`] that carries no binding
 //! ([`BuiltinCaller::from_principal`]); the reference builds the same value at authentication.
+//! A licence caller's forwarded `X-Strata-Token` rides on [`BuiltinCaller::strata_token`] and is
+//! read by `faq_ask` alone; the [`Debug`] impl redacts it.
 //!
 //! Each tool belongs to one family namespace (the reference's `(server, namespace)` group),
 //! and its wire name is `{namespace}_{function}` ([`wire_name`]); the tables below map a
@@ -139,8 +141,9 @@ impl CallerKind {
     }
 }
 
-/// A caller of the builtin provider: the reference's `CallerPrincipal`, minus every credential.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A caller of the builtin provider: the reference's `CallerPrincipal`, plus the one forwarded
+/// credential the reference keeps beside it (`CallerAuthority.strata_token`).
+#[derive(Clone, PartialEq, Eq)]
 pub struct BuiltinCaller {
     /// Which credential kind authenticated the caller.
     pub kind: CallerKind,
@@ -152,6 +155,27 @@ pub struct BuiltinCaller {
     pub tenant_id: Option<String>,
     /// The authenticating licence's id (tenant authors only).
     pub license_id: Option<String>,
+    /// The request's forwarded strata-rag licence (`X-Strata-Token`), handed only to `faq_ask`.
+    /// Never rendered: the [`Debug`] impl below redacts it.
+    pub strata_token: Option<String>,
+}
+
+/// Redacts [`BuiltinCaller::strata_token`], so a `?caller` log line cannot carry a credential.
+/// Every other field is safe to print and printed exactly as derived `Debug` would.
+impl std::fmt::Debug for BuiltinCaller {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuiltinCaller")
+            .field("kind", &self.kind)
+            .field("subject", &self.subject)
+            .field("scope", &self.scope)
+            .field("tenant_id", &self.tenant_id)
+            .field("license_id", &self.license_id)
+            .field(
+                "strata_token",
+                &self.strata_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl BuiltinCaller {
@@ -177,7 +201,15 @@ impl BuiltinCaller {
             tenant_id: Some(principal.tenant_id.to_string()),
             license_id: (kind == CallerKind::TenantAuthor)
                 .then(|| principal.license_id.to_string()),
+            strata_token: None,
         }
+    }
+
+    /// Attach the request's forwarded strata-rag licence (`X-Strata-Token`), read by the `/mcp`
+    /// handler. The reference keeps the same value on its `CallerAuthority`.
+    pub fn with_strata_token(mut self, strata_token: Option<String>) -> Self {
+        self.strata_token = strata_token;
+        self
     }
 }
 
