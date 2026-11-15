@@ -40,6 +40,11 @@ const PLATFORM_KEY: &str = "routes-sources-platform-key-0123456789abcd";
 const PLATFORM_TENANT: &str = "01900000-0000-7000-8000-00000000f001";
 /// The decoded `MCP_SOURCE_SECRET_KEY` the fixture installs, taken from the oracle fixture
 /// so no key-shaped literal lives in this file.
+fn source_secret_key_text() -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes())
+}
+
 fn key_bytes() -> [u8; 32] {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -97,6 +102,7 @@ fn auth_with_platform() -> Auth {
 fn source_settings(secret: bool) -> SourceSettings {
     SourceSettings {
         secret_key: secret.then_some(key_bytes().to_vec()),
+        secret_key_text: secret.then(source_secret_key_text),
         allowed_hosts: vec!["api.example.com".to_owned()],
     }
 }

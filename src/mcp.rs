@@ -825,7 +825,24 @@ fn project(tool: &ResolvedTool) -> Result<Tool, McpError> {
 /// The `/mcp` tower service. Mount it with `route_service`; the auth middleware must run
 /// first so the handler can read the resolved credential from the request extensions.
 pub fn service(state: &AppState) -> StreamableHttpService<McpServer, LocalSessionManager> {
-    service_with_builtin(state, Some(crate::builtin::create(state.pool.clone())))
+    service_with_builder(state, None)
+}
+
+/// The same service with the tenant builder's installed service.
+///
+/// The reference's builtin server mounts the `builder_*` toolkit only while the builder is
+/// enabled; `None` is that disabled deployment, and the builder family is then simply absent
+/// (the reference's scope lists the tools, the registry holds none). The composition root
+/// takes the handle from the runtime it installs, so the MCP surface and `/mcp/builder` serve
+/// the same [`BuilderService`].
+pub fn service_with_builder(
+    state: &AppState,
+    builder: Option<Arc<crate::builder::service::BuilderService>>,
+) -> StreamableHttpService<McpServer, LocalSessionManager> {
+    service_with_builtin(
+        state,
+        Some(crate::builtin::create(state.pool.clone(), builder)),
+    )
 }
 
 /// The same service with an explicit builtin provider.

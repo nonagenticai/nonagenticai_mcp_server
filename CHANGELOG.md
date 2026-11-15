@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **The tool builder is served.** `MCP_BUILDER_ENABLED=true` now composes the builder in the API
+  binary — its pinned egress, OAuth adapters, licence minter, source registry and
+  binding-ensure service all come from the API's own settings — instead of refusing startup,
+  and the reference's 20 `builder_*` MCP tools are registered for a tenant-level `mcp` licence
+  with no binding (the tenant-author caller). The listed descriptions and input schemas are the
+  reference's own FastMCP inventory; a member `mcp` licence and the platform tenant are refused,
+  and the tools' error texts are the reference's `guard` mapping. With the flag off, nothing
+  changes: both mounts keep answering the reference's `404`, and that licence stays `401`.
+
 - **One success log line per finished run**: `WorkerStore::finish` logs the run id, tenant,
   runtime and the status it actually wrote, so every finish path (the worker controller,
   recovery's interrupts, the external driver) has exactly one line; inputs, results and

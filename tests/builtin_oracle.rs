@@ -14,9 +14,9 @@ use mcp_server_rs::builtin::BuiltinProvider;
 use mcp_server_rs::builtin::scope::{BuiltinCaller, CallerKind};
 use support::Fixture;
 
-/// The family namespaces this lane ports. The reference's builtin server also mounts the 20
-/// `builder_*` tools; those belong to the tool builder (a separate lane) and are recorded in the
-/// fixture, not asserted here.
+/// The family namespaces this test compares. The reference's builtin server also mounts the 20
+/// `builder_*` tools; that family needs the installed builder service and is asserted against
+/// the same fixture by `tests/builtin_builder.rs`.
 const FAMILIES: [&str; 9] = [
     "crm",
     "order",
@@ -89,7 +89,7 @@ fn names(listed: &[Listed]) -> Vec<String> {
 #[tokio::test]
 async fn every_family_tool_matches_the_references_name_description_and_schema() {
     let fixture = Fixture::new().await;
-    let provider = mcp_server_rs::builtin::create(fixture.pool.clone());
+    let provider = mcp_server_rs::builtin::create(fixture.pool.clone(), None);
     // The union of every scope is the whole family surface: the care-bus licence carries the
     // reference's widest set (`licence:care-bus` = care-bus + researcher).
     let listed = listing(&provider, "licence:care-bus");
@@ -129,7 +129,7 @@ async fn every_family_tool_matches_the_references_name_description_and_schema() 
 #[tokio::test]
 async fn every_scope_grants_exactly_the_references_set() {
     let fixture = Fixture::new().await;
-    let provider = mcp_server_rs::builtin::create(fixture.pool.clone());
+    let provider = mcp_server_rs::builtin::create(fixture.pool.clone(), None);
     for (scope, expected) in oracle()["scopes"].as_object().expect("scopes") {
         let mut expected: Vec<String> = expected
             .as_array()
@@ -154,7 +154,7 @@ async fn the_uokik_gate_hides_exactly_two_tools() {
     // The fixture is generated with `LEGAL_UOKIK_ENABLED` on; this process builds the registry
     // with it off, which must remove exactly the two UOKiK tools and nothing else.
     let fixture = Fixture::new().await;
-    let provider = mcp_server_rs::builtin::create(fixture.pool.clone());
+    let provider = mcp_server_rs::builtin::create(fixture.pool.clone(), None);
     let listed = names(&listing(&provider, "carebus-researcher"));
     assert!(!listed.iter().any(|name| name == "legal_uokik_search"));
     assert!(!listed.iter().any(|name| name == "legal_uokik_document"));

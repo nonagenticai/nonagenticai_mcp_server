@@ -1,0 +1,963 @@
+{
+  "generated_from": "tests/fixtures/builtin/oracle.json (the pinned reference's FastMCP inventory)",
+  "tools": [
+    {
+      "description": "List a source's operations: op_key, version, status, method/path, effect and the\ninput/output schemas the script calls them with.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key"
+        ],
+        "type": "object"
+      },
+      "name": "builder_operation_list"
+    },
+    {
+      "description": "Create a new draft version of an operation with the given changes. Tools pin exact\nversions: call builder_tool_update afterwards so a tool picks up the new one.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "effect": {
+            "anyOf": [
+              {
+                "pattern": "^(read_only|writes)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "empty_response": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expected_error_statuses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expected_version": {
+            "description": "the version you last read",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "idempotency": {
+            "anyOf": [
+              {
+                "pattern": "^(none|downstream_key)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_retries": {
+            "anyOf": [
+              {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "op_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "redact_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "response_projection": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "maximum": 300,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "source_key",
+          "op_key",
+          "expected_version"
+        ],
+        "type": "object"
+      },
+      "name": "builder_operation_update"
+    },
+    {
+      "description": "Create draft operations (each addressed by an `op_key`) from the cached spec. Re-importing a\nkey adds a new version.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Per operation, keyed by operationId or \"GET /path\": {\"op_key\":..,\"effect\":\"read_only\"|\"writes\",\"expected_error_statuses\":[404],\"response_projection\":[\"/data\"],\"timeout_seconds\":20}. Handle 4xx in your script by listing them in expected_error_statuses."
+          },
+          "select": {
+            "description": "operationIds, or {\"method\":\"GET\",\"path\":\"/customers/{id}\"}",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "spec_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key",
+          "spec_sha256",
+          "select"
+        ],
+        "type": "object"
+      },
+      "name": "builder_operations_import"
+    },
+    {
+      "description": "The run envelope plus the trace of upstream calls (method, path, status, duration, reason).",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "description": "run id from tool_test",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "name": "builder_run_get"
+    },
+    {
+      "description": "Register an HTTPS API as a source of yours. Returns the source view (never the secret).",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "auth": {
+            "additionalProperties": true,
+            "description": "Auth config by \"kind\": {\"kind\":\"none\"}; {\"kind\":\"static_bearer\"}; {\"kind\":\"static_header\",\"header\":\"X-Api-Key\"}; {\"kind\":\"query_param\",\"param\":\"key\"}; {\"kind\":\"basic\",\"username\":\"u\"}; {\"kind\":\"oauth2_client_credentials\",\"token_url\":\"https://...\",\"client_id\":\"..\",\"scope\":\"..\",\"client_auth\":\"basic\"|\"post\"}. The secret itself goes in `token` (or builder_source_set_secret).",
+            "type": "object"
+          },
+          "base_url": {
+            "description": "public https URL of the API (no IP, no internal host)",
+            "type": "string"
+          },
+          "idempotency_header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_request_bytes": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_response_bytes": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "spec_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "path of the OpenAPI JSON document, e.g. \"/openapi.json\""
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "the secret for kinds that need one (write-only, never returned)"
+          }
+        },
+        "required": [
+          "source_key",
+          "base_url",
+          "auth"
+        ],
+        "type": "object"
+      },
+      "name": "builder_source_create"
+    },
+    {
+      "description": "Disable a source: its operations and tools stop working; the key stays reserved.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "the revision you last read (optimistic lock)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "builder_source_disable"
+    },
+    {
+      "description": "List your sources (no secrets) with their revisions.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "builder_source_list"
+    },
+    {
+      "description": "Set or rotate a source's secret. Write-only: the response shows only has_token.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "the revision you last read (optimistic lock)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "token": {
+            "description": "the new secret (1-4096 printable characters)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key",
+          "token",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "builder_source_set_secret"
+    },
+    {
+      "description": "Replace a source's configuration (same fields as source_create). Omitted token keeps it.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "auth": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "the revision you last read (optimistic lock)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "idempotency_header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_request_bytes": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_response_bytes": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "spec_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "omit to keep the stored secret (write-only)"
+          }
+        },
+        "required": [
+          "source_key",
+          "expected_revision",
+          "base_url",
+          "auth"
+        ],
+        "type": "object"
+      },
+      "name": "builder_source_update"
+    },
+    {
+      "description": "Fetch the source's OpenAPI 3.0/3.1 document (JSON only) through its credential. Returns its\nsha256 and every operation with `importable` and a `reason` when not.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "document path on the same origin; default: the source spec_path"
+          },
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key"
+        ],
+        "type": "object"
+      },
+      "name": "builder_spec_fetch"
+    },
+    {
+      "description": "List the operations of a previously fetched spec (by sha256).",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "source_key": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "spec_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key",
+          "spec_sha256"
+        ],
+        "type": "object"
+      },
+      "name": "builder_spec_operations"
+    },
+    {
+      "description": "Create a draft tool (a script over your operations).\n\nSCRIPT GUIDE. A tool is ONE deterministic async Python script run in an isolated sandbox. Send\nfiles=[{\"path\":\"tool.py\",\"content\":\"...\"}]; the entrypoint is tool:main, i.e.\n`async def main(inputs, ctx)` returning the result envelope. The host adds kit.py (helpers) and\nops.py (operation table): never send them, just `import kit`. Standard library only; the only way\nout of the sandbox is kit.call.\nCalling your operations: the script key is \"<source_key>.<op_key>\" (platform service operations:\n\"<service>.<op_key>\"), exactly the entries of `ops`. Arguments are the operation's input_schema\nfields (see builder_operation_list).\n  status, body = await kit.call(ctx, \"crm.get_customer\", {\"id\": inputs[\"id\"]})\n    -> (200, body); or (status, body) for a 4xx the operation lists in expected_error_statuses.\n       Any other failure raises RuntimeError(\"api_call_denied\").\n  body = await kit.call_ok(ctx, key, args, what=\"load customer\")   # non-200 ends the tool with backend_error\n  return await kit.guarded(run(inputs, ctx))                        # turns aborts/denied calls into envelopes\nResult envelope (build it with the helpers; invariants are enforced):\n  kit.completed(data, checks, next_steps)        -> status ok (check_failed if a check fails)\n  kit.check(name, \"pass\"|\"fail\"|\"degraded\"|\"error\", summary)   # name: lowercase snake_case\n  kit.precondition_failed(reason, [kit.step(\"other_tool\", \"why\")])   # reason: snake_case\n  kit.backend_error(\"message\", retryable=False)\n  kit.pending(token, next_steps) with kit.encode_token(tool, state) / kit.decode_token(token, tool)\n  kit.step(tool, reason, arguments); kit.clip(text); kit.Budget(wall_seconds) and kit.poll(...)\n    for bounded waiting; kit.describe(status, body) summarises an unexpected HTTP status.\nWrite tools: set effect=\"writes\" if ANY operation the tool uses writes; test them with\nconfirm_writes=true only against data you accept changing.\n",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "effect": {
+            "pattern": "^(read_only|writes)$",
+            "type": "string"
+          },
+          "files": {
+            "description": "[{\"path\":\"tool.py\",\"content\":\"..\"}]",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "description": "JSON Schema: {\"type\":\"object\",\"additionalProperties\":false,\"properties\":{..}}",
+            "type": "object"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "operation": {
+            "description": "\"object.verb\"",
+            "pattern": "^[a-z][a-z0-9_]{0,31}\\.[a-z][a-z0-9_]{0,31}$",
+            "type": "string"
+          },
+          "ops": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "[{\"source_key\":\"crm\",\"op_key\":\"get_customer\"}] or [{\"service\":\"..\",\"op_key\":\"..\"}]"
+          },
+          "public_name": {
+            "description": "the MCP tool name callers will see, e.g. crm_find_customer",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "result_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "omit: the standard result envelope"
+          }
+        },
+        "required": [
+          "public_name",
+          "operation",
+          "description",
+          "files",
+          "input_schema",
+          "effect"
+        ],
+        "type": "object"
+      },
+      "name": "builder_tool_create"
+    },
+    {
+      "description": "Read a tool version (default: latest): manifest, status, revision, your script files and ops.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tool_id": {
+            "description": "tool id (uuid) returned by tool_create / tool_list",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "tool_id"
+        ],
+        "type": "object"
+      },
+      "name": "builder_tool_get"
+    },
+    {
+      "description": "List your tools' versions with status and revision.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "builder_tool_list"
+    },
+    {
+      "description": "Publish a tool version together with the draft services/operations it pins (one atomic step).",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "the revision you last read (optimistic lock)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "tool_id": {
+            "description": "tool id (uuid) returned by tool_create / tool_list",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tool_id",
+          "version",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "builder_tool_publish"
+    },
+    {
+      "description": "Run a draft or published tool version once (no binding needed). Returns the run envelope;\nread the call trace and error excerpts with builder_run_get.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_writes": {
+            "default": false,
+            "description": "required for effect=writes tools: you accept real writes",
+            "type": "boolean"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_id": {
+            "description": "tool id (uuid) returned by tool_create / tool_list",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tool_id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "name": "builder_tool_test"
+    },
+    {
+      "description": "Create a new draft version of a tool; omitted fields keep their value, `files` replaces all script files, `ops` replaces the operation list and operations are re-pinned to their newest versions.\n\nSCRIPT GUIDE. A tool is ONE deterministic async Python script run in an isolated sandbox. Send\nfiles=[{\"path\":\"tool.py\",\"content\":\"...\"}]; the entrypoint is tool:main, i.e.\n`async def main(inputs, ctx)` returning the result envelope. The host adds kit.py (helpers) and\nops.py (operation table): never send them, just `import kit`. Standard library only; the only way\nout of the sandbox is kit.call.\nCalling your operations: the script key is \"<source_key>.<op_key>\" (platform service operations:\n\"<service>.<op_key>\"), exactly the entries of `ops`. Arguments are the operation's input_schema\nfields (see builder_operation_list).\n  status, body = await kit.call(ctx, \"crm.get_customer\", {\"id\": inputs[\"id\"]})\n    -> (200, body); or (status, body) for a 4xx the operation lists in expected_error_statuses.\n       Any other failure raises RuntimeError(\"api_call_denied\").\n  body = await kit.call_ok(ctx, key, args, what=\"load customer\")   # non-200 ends the tool with backend_error\n  return await kit.guarded(run(inputs, ctx))                        # turns aborts/denied calls into envelopes\nResult envelope (build it with the helpers; invariants are enforced):\n  kit.completed(data, checks, next_steps)        -> status ok (check_failed if a check fails)\n  kit.check(name, \"pass\"|\"fail\"|\"degraded\"|\"error\", summary)   # name: lowercase snake_case\n  kit.precondition_failed(reason, [kit.step(\"other_tool\", \"why\")])   # reason: snake_case\n  kit.backend_error(\"message\", retryable=False)\n  kit.pending(token, next_steps) with kit.encode_token(tool, state) / kit.decode_token(token, tool)\n  kit.step(tool, reason, arguments); kit.clip(text); kit.Budget(wall_seconds) and kit.poll(...)\n    for bounded waiting; kit.describe(status, body) summarises an unexpected HTTP status.\nWrite tools: set effect=\"writes\" if ANY operation the tool uses writes; test them with\nconfirm_writes=true only against data you accept changing.\n",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "effect": {
+            "anyOf": [
+              {
+                "pattern": "^(read_only|writes)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expected_revision": {
+            "description": "the revision you last read (optimistic lock)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "input_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ops": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "result_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_id": {
+            "description": "tool id (uuid) returned by tool_create / tool_list",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "builder_tool_update"
+    },
+    {
+      "description": "Re-bind your existing product bindings so they include your published toolkits.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "limit to one product; default all"
+          }
+        },
+        "type": "object"
+      },
+      "name": "builder_toolkit_bind"
+    },
+    {
+      "description": "Create a draft toolkit of your published tools (or its next version).",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "description": "lowercase snake_case key, starts with a letter, max 64 chars",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "toolkit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "set with expected_revision for a new version"
+          },
+          "tools": {
+            "description": "[{\"tool_id\":\"..\",\"version\":1}] (version omitted: newest published)",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "tools"
+        ],
+        "type": "object"
+      },
+      "name": "builder_toolkit_create"
+    },
+    {
+      "description": "Publish a toolkit version and re-bind your product bindings so they include it.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "the revision you last read (optimistic lock)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "toolkit_id": {
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "toolkit_id",
+          "version",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "builder_toolkit_publish"
+    }
+  ]
+}

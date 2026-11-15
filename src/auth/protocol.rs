@@ -209,7 +209,36 @@ async fn builtin_authority(
         .ok_or(AuthError::Unauthorized)?;
     let licence = auth.licences.introspect_any(token).await?;
     if licence.app != CAREBUS_LICENCE_APP {
-        return Err(AuthError::Unauthorized);
+        // The tool builder (`auth/protocol.py:113-125,163-181`): the tenant's OWN tenant-level
+        // `mcp` licence with no binding, scoped to the builder_* toolkit only, and only while
+        // the builder is enabled. With the flag off this licence is the reference's 401
+        // "binding required"; a member licence and the platform tenant are refused.
+        if !auth.builder_enabled || auth.license_app_key.as_deref() != Some(licence.app.as_str()) {
+            return Err(AuthError::Unauthorized);
+        }
+        if !licence.identity.tenant_level() {
+            return Err(AuthError::Unauthorized);
+        }
+        if licence.identity.tenant_id == auth.platform_tenant_id {
+            return Err(AuthError::Forbidden);
+        }
+        // `PROTOCOL_PATHS = {"/mcp", "/mcp/"}`.
+        if path != "/mcp" && path != "/mcp/" {
+            return Err(AuthError::Forbidden);
+        }
+        return Ok(Principal {
+            tenant_id: licence.identity.tenant_id,
+            license_id: licence.identity.license_id,
+            subject: licence.identity.subject,
+            binding_id: None,
+            binding_revision: None,
+            management: false,
+            platform: false,
+            licence: Some(super::principal::LicenceFacts {
+                app: licence.app,
+                subject_kind: licence.identity.subject_kind,
+            }),
+        });
     }
     // `PROTOCOL_PATHS = {"/mcp", "/mcp/"}`.
     if path != "/mcp" && path != "/mcp/" {

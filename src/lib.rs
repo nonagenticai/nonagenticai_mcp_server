@@ -299,11 +299,14 @@ fn assemble(
     builder: routes::builder::BuilderRuntime,
     channel_secret: Option<String>,
 ) -> Router {
+    // The installed builder service rides to the builtin provider before the runtime moves into
+    // its router: `/mcp` and `/mcp/builder` then serve one service, never two.
+    let builder_service = builder.service_handle();
     let (router, _) = api_router().split_for_parts();
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
     // envelope, so it is not part of the utoipa OpenAPI document.
     router
-        .route_service("/mcp", mcp::service(&state))
+        .route_service("/mcp", mcp::service_with_builder(&state, builder_service))
         .merge(routes::internal::router(std::sync::Arc::new(internal)))
         .merge(routes::builder::router(builder))
         .layer(axum::Extension(routes::fr_channel::ChannelSecret(
