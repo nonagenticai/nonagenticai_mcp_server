@@ -1,0 +1,700 @@
+{
+ "auth_kinds": {
+  "basic": {
+   "needs_secret": true
+  },
+  "licence": {
+   "needs_secret": false
+  },
+  "none": {
+   "needs_secret": false
+  },
+  "oauth2_client_credentials": {
+   "needs_secret": true
+  },
+  "query_param": {
+   "needs_secret": true
+  },
+  "static_bearer": {
+   "needs_secret": true
+  },
+  "static_header": {
+   "needs_secret": true
+  }
+ },
+ "base_url_cases": [
+  {
+   "allow_internal_http": false,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com"
+  },
+  {
+   "allow_internal_http": false,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com/v1/coding"
+  },
+  {
+   "allow_internal_http": false,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com/"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "http://api.example.com"
+  },
+  {
+   "allow_internal_http": true,
+   "message": null,
+   "ok": true,
+   "value": "http://api.example.com"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://user:pw@api.example.com"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://api.example.com?q=1"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://api.example.com#frag"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://127.0.0.1"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://2130706433"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://0x7f.1"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://[::1]"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://api.example.com:65536"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://-bad.example.com"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://api.example.com/Coding"
+  },
+  {
+   "allow_internal_http": false,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com/a/b"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "not a url"
+  },
+  {
+   "allow_internal_http": false,
+   "message": "source requires an explicitly approved origin",
+   "ok": false,
+   "value": "https://"
+  }
+ ],
+ "enforce_cases": [
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "api.example.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "message": null,
+   "ok": true
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "API.EXAMPLE.COM"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "message": null,
+   "ok": true
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "*.example.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "message": null,
+   "ok": true
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "*.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "message": null,
+   "ok": true
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "example.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "message": "source host is not in the allowed host list",
+   "ok": false
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "api.example.com"
+   ],
+   "base_url": "https://api.example.com:8443/v1",
+   "message": "source host is not in the allowed host list",
+   "ok": false
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "api.example.com:8443"
+   ],
+   "base_url": "https://api.example.com:8443/v1",
+   "message": null,
+   "ok": true
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    "api.example.com:443"
+   ],
+   "base_url": "https://api.example.com:443/v1",
+   "message": "source host is not in the allowed host list",
+   "ok": false
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [
+    ""
+   ],
+   "base_url": "https://api.example.com/v1",
+   "message": "source host is not in the allowed host list",
+   "ok": false
+  },
+  {
+   "allow_internal_http": false,
+   "allowed": [],
+   "base_url": "https://api.example.com/v1",
+   "message": "source host is not in the allowed host list",
+   "ok": false
+  }
+ ],
+ "forbidden_headers": [
+  "connection",
+  "content-length",
+  "content-type",
+  "cookie",
+  "host",
+  "idempotency-key",
+  "proxy-authorization",
+  "te",
+  "transfer-encoding",
+  "upgrade",
+  "x-idempotency-key"
+ ],
+ "host_cases": [
+  {
+   "allowed": [
+    "api.example.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "ok": true
+  },
+  {
+   "allowed": [
+    "API.EXAMPLE.COM"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "ok": true
+  },
+  {
+   "allowed": [
+    "*.example.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "ok": true
+  },
+  {
+   "allowed": [
+    "*.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "ok": true
+  },
+  {
+   "allowed": [
+    "example.com"
+   ],
+   "base_url": "https://api.example.com/v1",
+   "ok": false
+  },
+  {
+   "allowed": [
+    "api.example.com"
+   ],
+   "base_url": "https://api.example.com:8443/v1",
+   "ok": false
+  },
+  {
+   "allowed": [
+    "api.example.com:8443"
+   ],
+   "base_url": "https://api.example.com:8443/v1",
+   "ok": true
+  },
+  {
+   "allowed": [
+    "api.example.com:443"
+   ],
+   "base_url": "https://api.example.com:443/v1",
+   "ok": false
+  },
+  {
+   "allowed": [
+    ""
+   ],
+   "base_url": "https://api.example.com/v1",
+   "ok": false
+  },
+  {
+   "allowed": [],
+   "base_url": "https://api.example.com/v1",
+   "ok": false
+  }
+ ],
+ "ip_cases": [
+  {
+   "host": "127.0.0.1",
+   "ip": true
+  },
+  {
+   "host": "[::1]",
+   "ip": true
+  },
+  {
+   "host": "::1",
+   "ip": true
+  },
+  {
+   "host": "2130706433",
+   "ip": true
+  },
+  {
+   "host": "0x7f.1",
+   "ip": true
+  },
+  {
+   "host": "api.example.com",
+   "ip": false
+  },
+  {
+   "host": "example.1",
+   "ip": true
+  },
+  {
+   "host": "api.example.com2",
+   "ip": false
+  }
+ ],
+ "source_bodies": [
+  {
+   "body": {
+    "auth": {
+     "kind": "static_bearer"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing",
+    "token": "synthetic-token"
+   },
+   "dump": "{\"auth\":{\"kind\":\"static_bearer\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":\"**********\",\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"billing\"}",
+   "model": "SourceCreate",
+   "name": "create_static_bearer",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "public"
+   },
+   "dump": "{\"auth\":{\"kind\":\"none\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":null,\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"public\"}",
+   "model": "SourceCreate",
+   "name": "create_no_auth_no_token",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "app_key": "coding",
+     "kind": "licence"
+    },
+    "base_url": "https://api.example.com/v1",
+    "source_key": "coding"
+   },
+   "dump": "{\"auth\":{\"kind\":\"licence\",\"app_key\":\"coding\",\"scheme\":\"bearer\",\"bundle\":null},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":null,\"base_url\":\"https://api.example.com/v1\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"coding\"}",
+   "model": "SourceCreate",
+   "name": "create_licence_bearer",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "app_key": "coding",
+     "bundle": "coding-bundle",
+     "kind": "licence",
+     "scheme": "x_tenant_id_bearer"
+    },
+    "base_url": "https://api.example.com/v1",
+    "source_key": "coding"
+   },
+   "dump": "{\"auth\":{\"kind\":\"licence\",\"app_key\":\"coding\",\"scheme\":\"x_tenant_id_bearer\",\"bundle\":\"coding-bundle\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":null,\"base_url\":\"https://api.example.com/v1\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"coding\"}",
+   "model": "SourceCreate",
+   "name": "create_licence_header_bundle",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "header": "X-Api-Key",
+     "kind": "static_header"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing",
+    "token": "synthetic-token"
+   },
+   "dump": "{\"auth\":{\"kind\":\"static_header\",\"header\":\"X-Api-Key\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":\"**********\",\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"billing\"}",
+   "model": "SourceCreate",
+   "name": "create_static_header",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "header": "Content-Type",
+     "kind": "static_header"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing",
+    "token": "synthetic-token"
+   },
+   "error": "Value error, header is reserved",
+   "model": "SourceCreate",
+   "name": "create_static_header_reserved",
+   "ok": false
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "query_param",
+     "param": "api_key"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing",
+    "token": "synthetic-token"
+   },
+   "dump": "{\"auth\":{\"kind\":\"query_param\",\"param\":\"api_key\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":\"**********\",\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"billing\"}",
+   "model": "SourceCreate",
+   "name": "create_query_param",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "basic",
+     "username": "svc"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing",
+    "token": "pa ss"
+   },
+   "dump": "{\"auth\":{\"kind\":\"basic\",\"username\":\"svc\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":\"**********\",\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"billing\"}",
+   "model": "SourceCreate",
+   "name": "create_basic",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "client_auth": "post",
+     "client_id": "client-1",
+     "kind": "oauth2_client_credentials",
+     "scope": "read write",
+     "token_url": "https://auth.example.com/token"
+    },
+    "base_url": "https://api.example.com",
+    "idempotency_header": "Idempotency-Key",
+    "max_request_bytes": 1024,
+    "max_response_bytes": 65536,
+    "source_key": "billing",
+    "spec_path": "/openapi.json",
+    "token": "synthetic-token"
+   },
+   "dump": "{\"auth\":{\"kind\":\"oauth2_client_credentials\",\"token_url\":\"https://auth.example.com/token\",\"client_id\":\"client-1\",\"scope\":\"read write\",\"audience\":null,\"client_auth\":\"post\"},\"idempotency_header\":\"Idempotency-Key\",\"max_request_bytes\":1024,\"max_response_bytes\":65536,\"spec_path\":\"/openapi.json\",\"token\":\"**********\",\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"source_key\":\"billing\"}",
+   "model": "SourceCreate",
+   "name": "create_oauth2",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "static_bearer"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing"
+   },
+   "error": "Value error, a source of this kind needs its secret",
+   "model": "SourceCreate",
+   "name": "create_missing_secret",
+   "ok": false
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "billing",
+    "token": "x"
+   },
+   "error": "Value error, this source kind carries no stored secret",
+   "model": "SourceCreate",
+   "name": "create_secret_on_secretless",
+   "ok": false
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "https://api.example.com",
+    "source_key": "Upper"
+   },
+   "error": "String should match pattern '^[a-z][a-z0-9_]{0,63}$'",
+   "model": "SourceCreate",
+   "name": "create_bad_key",
+   "ok": false
+  },
+  {
+   "body": {
+    "allow_internal_http": true,
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "http://api.cluster.local:8080",
+    "ca_file": "/etc/ssl/internal-ca.pem",
+    "source_key": "internal"
+   },
+   "dump": "{\"auth\":{\"kind\":\"none\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":null,\"base_url\":\"http://api.cluster.local:8080\",\"allow_internal_http\":true,\"ca_file\":\"/etc/ssl/internal-ca.pem\",\"source_key\":\"internal\"}",
+   "model": "SourceCreate",
+   "name": "create_internal_http_allowed",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "https://api.example.com",
+    "ca_file": "relative/ca.pem",
+    "source_key": "internal"
+   },
+   "error": "Value error, ca_file must be an absolute path",
+   "model": "SourceCreate",
+   "name": "create_bad_ca_file",
+   "ok": false
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "https://api.example.com",
+    "expected_revision": 3
+   },
+   "dump": "{\"auth\":{\"kind\":\"none\"},\"idempotency_header\":null,\"max_request_bytes\":null,\"max_response_bytes\":null,\"spec_path\":null,\"token\":null,\"base_url\":\"https://api.example.com\",\"allow_internal_http\":false,\"ca_file\":null,\"expected_revision\":3}",
+   "model": "SourceUpdate",
+   "name": "update_with_revision",
+   "ok": true
+  },
+  {
+   "body": {
+    "auth": {
+     "kind": "none"
+    },
+    "base_url": "https://api.example.com",
+    "expected_revision": 0
+   },
+   "error": "Input should be greater than 0",
+   "model": "SourceUpdate",
+   "name": "update_zero_revision",
+   "ok": false
+  },
+  {
+   "body": {
+    "expected_revision": 2,
+    "token": "a b c"
+   },
+   "dump": "{\"token\":\"**********\",\"expected_revision\":2}",
+   "model": "TokenUpdate",
+   "name": "token_update",
+   "ok": true
+  },
+  {
+   "body": {
+    "expected_revision": 2,
+    "token": "a\tb"
+   },
+   "error": "Value error, invalid credential material",
+   "model": "TokenUpdate",
+   "name": "token_update_control_char",
+   "ok": false
+  },
+  {
+   "body": {
+    "expected_revision": 1
+   },
+   "dump": "{\"expected_revision\":1}",
+   "model": "RevisionOnly",
+   "name": "revision_only",
+   "ok": true
+  },
+  {
+   "body": {},
+   "error": "Field required",
+   "model": "RevisionOnly",
+   "name": "revision_only_missing",
+   "ok": false
+  }
+ ],
+ "tenant_url_cases": [
+  {
+   "allow_path": true,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com"
+  },
+  {
+   "allow_path": true,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com/a/b/"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "http://api.example.com"
+  },
+  {
+   "allow_path": false,
+   "message": null,
+   "ok": true,
+   "value": "https://api.example.com"
+  },
+  {
+   "allow_path": false,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api.example.com/a"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://localhost"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api.internal"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api.svc"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api.cluster.local"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://10.0.0.1"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api..example.com"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api.example.com/../x"
+  },
+  {
+   "allow_path": true,
+   "message": "a public https URL is required",
+   "ok": false,
+   "value": "https://api.example.com#f"
+  }
+ ]
+}

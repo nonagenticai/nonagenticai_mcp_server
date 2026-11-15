@@ -56,6 +56,12 @@ pub struct AppState {
     pub platform_tenant_id: auth::Rfc4122Uuid,
     /// `CATALOG_PAGE_SIZE`: the page bound for `tools/list` and the catalog projection.
     pub catalog_page_size: u32,
+    /// `MCP_PLATFORM_DATABASE_URL`: the platform-authoring pool — the same database under the
+    /// elevated `mcp_platform` role. `None` makes the platform-authoring routes answer
+    /// `503 platform_authoring_unavailable`, the reference's behaviour when the pool is unset.
+    pub platform: Option<PgPool>,
+    /// `MCP_SOURCE_*`: the tool-source authoring settings (sealing key and host allow-list).
+    pub sources: config::SourceSettings,
     /// The `MCP_*` execution queue, timeout and retention bounds.
     pub execution: config::ExecutionSettings,
 }

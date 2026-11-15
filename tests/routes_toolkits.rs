@@ -190,6 +190,8 @@ impl Fixture {
                 )
                 .expect("static uuid"),
                 catalog_page_size: 10,
+                platform: None,
+                sources: mcp_server_rs::config::SourceSettings::default(),
             },
             auth(),
         )

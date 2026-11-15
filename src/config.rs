@@ -37,6 +37,13 @@ pub struct Config {
     pub platform_tenant_id: Rfc4122Uuid,
     /// `CATALOG_PAGE_SIZE` (optional, default 10, 1 to 100): the management catalog page bound.
     pub catalog_page_size: u32,
+    /// `MCP_PLATFORM_DATABASE_URL` (optional): the platform-authoring pool. It names the SAME
+    /// database as `DATABASE_URL` under the elevated `mcp_platform` role — not a second schema
+    /// and not a second migration target. The platform-authoring routes answer
+    /// `503 platform_authoring_unavailable` when it is unset, as the reference service does.
+    pub platform_database_url: Option<String>,
+    /// `MCP_SOURCE_*`: the tool-source authoring settings (sealing key and host allow-list).
+    pub sources: SourceSettings,
     /// `MCP_APPROVED_RUNNER_IMAGES` (optional, JSON list, default empty): the runner image
     /// digests a `kata_python` tool may name, e.g. `["registry.example/runner@sha256:…"]`.
     /// A tool with any other digest is refused.
@@ -83,6 +90,8 @@ impl Config {
             execution_enabled,
             platform_tenant_id,
             catalog_page_size,
+            platform_database_url: get("MCP_PLATFORM_DATABASE_URL"),
+            sources: SourceSettings::from_lookup(|key| get(key))?,
             approved_runner_images: json_string_list(
                 get("MCP_APPROVED_RUNNER_IMAGES"),
                 "MCP_APPROVED_RUNNER_IMAGES",
@@ -93,6 +102,84 @@ impl Config {
             packages: PackageLimits::from_lookup(get)?,
         })
     }
+}
+
+/// The tool-source authoring settings, from the reference `Settings`
+/// (`src/config.py:141-142`).
+///
+/// `secret_key` seals a source's one stored token with AES-256-GCM, keyed by the source id
+/// as associated data. The reference decodes `MCP_SOURCE_SECRET_KEY` at settings
+/// construction (`source_key_shape`), so an unusable key refuses startup; so does this.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceSettings {
+    /// The 32-byte key from `MCP_SOURCE_SECRET_KEY` (base64url, padded or unpadded).
+    pub secret_key: Option<Vec<u8>>,
+    /// `MCP_SOURCE_ALLOWED_HOSTS`: exact hosts, `*.suffix` patterns, or `host:port` entries.
+    /// An empty allow-list allows nothing — the reference's `host_allowed` semantics.
+    pub allowed_hosts: Vec<String>,
+}
+
+impl SourceSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`SourceSettings::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let secret_key = match get("MCP_SOURCE_SECRET_KEY") {
+            None => None,
+            Some(value) => Some(decode_source_key(&value)?),
+        };
+        let allowed_hosts = split_source_hosts(get("MCP_SOURCE_ALLOWED_HOSTS"))?;
+        Ok(Self {
+            secret_key,
+            allowed_hosts,
+        })
+    }
+}
+
+/// A 32-byte key from unpadded or padded base64url — the reference's `decode_key`.
+fn decode_source_key(value: &str) -> Result<Vec<u8>, ConfigError> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let invalid = |reason: &str| ConfigError::Invalid {
+        name: "MCP_SOURCE_SECRET_KEY",
+        reason: reason.to_owned(),
+    };
+    let trimmed = value.trim().trim_end_matches('=');
+    let key = URL_SAFE_NO_PAD
+        .decode(trimmed)
+        .map_err(|_| invalid("source secret key must be base64url"))?;
+    if key.len() != 32 {
+        return Err(invalid("source secret key must be 32 bytes"));
+    }
+    Ok(key)
+}
+
+/// The reference's `split_hosts` (`src/config.py:231-241`): a comma-separated list of exact
+/// hosts, `*.suffix` patterns or `host:port` entries, lower-cased, at most 256 of them.
+fn split_source_hosts(value: Option<String>) -> Result<Vec<String>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let pattern = regex::Regex::new(
+        r"^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[0-9]{1,5})?$",
+    )
+    .expect("static host pattern");
+    let hosts: Vec<String> = value
+        .split(',')
+        .map(|h| h.trim().to_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect();
+    if hosts.len() > 256 || hosts.iter().any(|h| !pattern.is_match(h)) {
+        return Err(ConfigError::Invalid {
+            name: "MCP_SOURCE_ALLOWED_HOSTS",
+            reason: "invalid source host allow-list entry".to_owned(),
+        });
+    }
+    Ok(hosts)
 }
 
 /// The package bounds from the reference `Settings`: how many files a submitted tool package may

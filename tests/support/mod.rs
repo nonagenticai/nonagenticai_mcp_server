@@ -192,6 +192,8 @@ impl Fixture {
             approved_runner_images: Vec::new(),
             platform_tenant_id: Rfc4122Uuid::parse(TENANT_PLATFORM).expect("static uuid"),
             catalog_page_size,
+            platform: None,
+            sources: mcp_server_rs::config::SourceSettings::default(),
             execution: ExecutionSettings::default(),
         }
     }
