@@ -11,7 +11,7 @@ use crate::builtin::{BuiltinProvider, BuiltinTool, boxed};
 
 use super::{
     Clients, Service, argument, bool_or, child, child_or, element_text, enum_or, html_to_text,
-    int_or, optional_int, optional_string, pdf_text, schema, shown_repr, success, truncate, truthy,
+    int_or, optional_int, optional_string, schema, shown_repr, success, truncate, truthy,
 };
 
 /// The reference's `_ELI`: `DU/1964/59`, `MP/2020/1`.
@@ -524,9 +524,22 @@ async fn current(
                 full.len()
             ));
         }
-        // The reference cuts the requested article out of the PDF text here; this build has
-        // no PDF parser (see `super::pdf_text`), so the PDF-only path is a permanent error.
-        Some(pdf_text(&full)?)
+        let text = super::pdf_full_text(full).await?;
+        match suffix {
+            None => Some(text),
+            Some(suffix) => match crate::pdf::cut_article(&text, suffix) {
+                Ok(article) => article,
+                Err(ambiguous) => {
+                    let flat = &ambiguous.0;
+                    return Err(format!(
+                        "[permanent] article ambiguous: {} -- {} prints it as 'Art. {flat}.' \
+                         which could also be a real article {flat}; check the PDF",
+                        super::python_str(article),
+                        source_eli
+                    ));
+                }
+            },
+        }
     };
     let Some(text) = text else {
         return Err(format!(

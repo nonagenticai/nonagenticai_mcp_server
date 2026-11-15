@@ -1549,7 +1549,7 @@ async fn eli_act_text_missing_legal_status_date_is_inferred() {
 }
 
 #[tokio::test]
-async fn eli_act_text_pdf_only_path_fetches_the_typed_pdf_and_stops() {
+async fn eli_act_text_reports_a_damaged_pdf_permanently() {
     let (base, stub, _locations) = local_server().await;
     stub.json(
         "GET",
@@ -1590,6 +1590,76 @@ async fn eli_act_text_pdf_only_path_fetches_the_typed_pdf_and_stops() {
             "/eli/acts/DU/2026/236/text/T/D20260236L.pdf",
         ]
     );
+}
+
+#[tokio::test]
+async fn eli_act_text_pdf_only_path_extracts_the_consolidated_act() {
+    let (base, stub, _locations) = local_server().await;
+    stub.json(
+        "GET",
+        "/eli/acts/DU/1964/59/references",
+        StatusCode::OK,
+        eli_refs_answer(),
+    );
+    stub.json(
+        "GET",
+        "/eli/acts/DU/2026/236",
+        StatusCode::OK,
+        tj_meta(false),
+    );
+    stub.bytes(
+        "GET",
+        "/eli/acts/DU/2026/236/text/T/D20260236L.pdf",
+        StatusCode::OK,
+        include_bytes!("fixtures/legal_pdf/duw_act.pdf"),
+        "application/pdf",
+    );
+    let clients = clients_for(Service::Eli, &base);
+    let out = legal::eli::act_text(&clients, &args(json!({"eli": "DU/1964/59"})))
+        .await
+        .expect("the consolidated PDF text");
+    assert_eq!(out["source_format"], "pdf");
+    assert!(
+        out["text"]
+            .as_str()
+            .expect("text")
+            .starts_with("UCHWAŁA NR LII/276/2023"),
+        "{}",
+        out["text"]
+    );
+}
+
+#[tokio::test]
+async fn eli_act_text_cuts_one_article_out_of_the_pdf() {
+    let (base, stub, _locations) = local_server().await;
+    stub.json(
+        "GET",
+        "/eli/acts/DU/1964/59/references",
+        StatusCode::OK,
+        eli_refs_answer(),
+    );
+    stub.json(
+        "GET",
+        "/eli/acts/DU/2026/236",
+        StatusCode::OK,
+        tj_meta(false),
+    );
+    stub.bytes(
+        "GET",
+        "/eli/acts/DU/2026/236/text/T/D20260236L.pdf",
+        StatusCode::OK,
+        include_bytes!("fixtures/legal_pdf/layout.pdf"),
+        "application/pdf",
+    );
+    let clients = clients_for(Service::Eli, &base);
+    let out = legal::eli::act_text(
+        &clients,
+        &args(json!({"eli": "DU/1964/59", "article": "61^1"})),
+    )
+    .await
+    .expect("the article");
+    assert_eq!(out["source_format"], "pdf");
+    assert_eq!(out["text"], "Art. 61^1.");
 }
 
 // ── SAOS ──────────────────────────────────────────────────────────────────────────────────
@@ -2456,7 +2526,7 @@ fn uokik_search_and_decision_parsers_match_the_reference() {
 }
 
 #[tokio::test]
-async fn uokik_document_fetches_the_attachment_then_reports_the_pdf_gap() {
+async fn uokik_document_reports_a_damaged_decision_pdf() {
     let (base, stub, _locations) = local_server().await;
     stub.text(
         "GET",
@@ -2490,6 +2560,34 @@ async fn uokik_document_fetches_the_attachment_then_reports_the_pdf_gap() {
         Some("editDocument&act=Decyzja")
     );
     assert_eq!(requests[1].path, UOKIK_PDF_PATH);
+}
+
+#[tokio::test]
+async fn uokik_document_extracts_the_decision_pdf_text() {
+    let (base, stub, _locations) = local_server().await;
+    stub.text(
+        "GET",
+        &format!("/bp/dec_prez.nsf/1/{UOKIK_UNID}"),
+        StatusCode::OK,
+        UOKIK_DECISION_HTML,
+    );
+    stub.bytes(
+        "GET",
+        UOKIK_PDF_PATH,
+        StatusCode::OK,
+        include_bytes!("fixtures/legal_pdf/duw_act.pdf"),
+        "application/pdf",
+    );
+    let clients = clients_for(Service::Uokik, &base);
+    let doc = legal::uokik::document(
+        &clients,
+        &args(json!({"unid": UOKIK_UNID.to_ascii_lowercase()})),
+    )
+    .await
+    .expect("the decision PDF text");
+    let text = doc["text"].as_str().expect("text");
+    assert!(text.starts_with("UCHWAŁA NR LII/276/2023"), "{:.80}", text);
+    assert_eq!(doc["pdf_urls"].as_array().map(Vec::len), Some(1));
 }
 
 #[test]
@@ -2649,7 +2747,7 @@ async fn duw_search_rejects_bad_input_before_any_request() {
 }
 
 #[tokio::test]
-async fn duw_document_maps_metadata_and_reports_the_pdf_gap() {
+async fn duw_document_reports_a_damaged_act_pdf() {
     let (base, stub, _locations) = local_server().await;
     stub.json(
         "GET",
@@ -2667,7 +2765,7 @@ async fn duw_document_maps_metadata_and_reports_the_pdf_gap() {
     let clients = clients_for(Service::Duw, &base);
     let error = legal::duw::document(&clients, &args(json!({"year": 2026, "position": 4019})))
         .await
-        .expect_err("the PDF parser is not ported");
+        .expect_err("a damaged PDF is the reference's permanent error");
     assert!(
         error.starts_with("[permanent] cannot read the PDF text"),
         "{error}"
@@ -2690,6 +2788,32 @@ async fn duw_document_maps_metadata_and_reports_the_pdf_gap() {
             ("position".to_owned(), "4019".to_owned()),
         ])
     );
+}
+
+#[tokio::test]
+async fn duw_document_extracts_the_published_pdf_text() {
+    // The real published act (fixtures/legal_pdf/duw_act.pdf): the PDF path's whole purpose.
+    let (base, stub, _locations) = local_server().await;
+    stub.json(
+        "GET",
+        "/api/legalact",
+        StatusCode::OK,
+        duw_legalact_answer(),
+    );
+    stub.bytes(
+        "GET",
+        "/GetActPdf.ashx",
+        StatusCode::OK,
+        include_bytes!("fixtures/legal_pdf/duw_act.pdf"),
+        "application/pdf",
+    );
+    let clients = clients_for(Service::Duw, &base);
+    let doc = legal::duw::document(&clients, &args(json!({"year": 2026, "position": 4019})))
+        .await
+        .expect("the PDF text");
+    let text = doc["text"].as_str().expect("text");
+    assert!(text.starts_with("UCHWAŁA NR LII/276/2023"), "{:.80}", text);
+    assert_eq!(doc["truncated"], Value::Bool(false));
 }
 
 #[test]
