@@ -32,3 +32,7 @@ tests/fixtures/phase3b/policy.json:(100\.64\.0\.1|100\.100\.100\.200|db\.interna
 # of this estate: `api.internal` and `auth.internal` are refusal cases, and the suffix literals
 # are the deny list itself — the same justification as the phase-3B entries above.
 src/sources/models.rs:(\.internal|api\.internal|auth\.internal)
+
+# Cutover lane (2026-11-15). The redaction test's sample DSN: `db.internal` is a placeholder in
+# an error string the test proves is MASKED, not an address of this estate.
+src/grant.rs:db\.internal
