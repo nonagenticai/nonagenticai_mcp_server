@@ -22,12 +22,36 @@ use super::principal::{LicenseIdentity, SubjectKind};
 use super::time::{parse_iso8601_epoch_seconds, unix_now};
 use super::uuid::Rfc4122Uuid;
 
+/// A raw introspection's answer: the licence's application key plus the identity it grants.
+///
+/// The reference's `LicenseClient.introspect(token)` (`licenses.py:162-210`) posts `{"token"}`
+/// with NO `app`, and its only caller — a non-binding (builtin) caller — checks the application
+/// key and the subject kind itself. Nothing here grants access on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LicenceApp {
+    pub app: String,
+    pub identity: LicenseIdentity,
+}
+
 /// Resolves an opaque licence token into the identity it grants.
 pub trait LicenceAuthority: Send + Sync {
     fn authenticate<'a>(
         &'a self,
         token: &'a str,
     ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>>;
+
+    /// Raw introspection, the reference's `introspect(token)`: `{"token"}` and no `app`.
+    ///
+    /// Used only by the non-binding (builtin) path, which then requires the care-bus
+    /// application key. The default fails closed, so a test double that has not opted in can
+    /// never accidentally authenticate a builtin caller.
+    fn introspect_any<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenceApp, AuthError>> {
+        let _ = token;
+        Box::pin(async { Err(AuthError::Unavailable) })
+    }
 
     /// Introspect `token` as a licence for a specific application key — the reference's
     /// `LicenseClient.authenticate(token, app_key)` (`licenses.py:98-160`), which the broker
@@ -95,6 +119,18 @@ impl HttpLicenceAuthority {
 
     /// Validate one introspection payload exactly as the reference client does, for `app_key`.
     fn parse(&self, info: &Value, app_key: &str) -> Result<LicenseIdentity, AuthError> {
+        self.parse_with(info, Some(app_key))
+            .map(|licence| licence.identity)
+    }
+
+    /// The same validation without an expected application key: the reference's raw
+    /// introspection, whose caller checks `app.key` itself.
+    fn parse_any(&self, info: &Value) -> Result<LicenceApp, AuthError> {
+        self.parse_with(info, None)
+    }
+
+    /// `expected = None` accepts any application key and reports it.
+    fn parse_with(&self, info: &Value, expected: Option<&str>) -> Result<LicenceApp, AuthError> {
         let info = info.as_object().ok_or(AuthError::Unauthorized)?;
         if info.get("active") != Some(&Value::Bool(true)) {
             return Err(AuthError::Unauthorized);
@@ -103,7 +139,12 @@ impl HttpLicenceAuthority {
             .get("app")
             .and_then(Value::as_object)
             .ok_or(AuthError::Unauthorized)?;
-        if app.get("key").and_then(Value::as_str) != Some(app_key) {
+        let app_key = app
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+            .ok_or(AuthError::Unauthorized)?;
+        if expected.is_some_and(|expected| expected != app_key) {
             return Err(AuthError::Unauthorized);
         }
         let tenant_id = info
@@ -144,11 +185,14 @@ impl HttpLicenceAuthority {
             Some(Value::String(kind)) if kind == "member" => Some(SubjectKind::Member),
             Some(_) => return Err(AuthError::Unauthorized),
         };
-        Ok(LicenseIdentity {
-            tenant_id,
-            license_id,
-            subject,
-            subject_kind,
+        Ok(LicenceApp {
+            app: app_key.to_owned(),
+            identity: LicenseIdentity {
+                tenant_id,
+                license_id,
+                subject,
+                subject_kind,
+            },
         })
     }
 }
@@ -172,37 +216,54 @@ impl HttpLicenceAuthority {
         app_key: &'a str,
     ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
         Box::pin(async move {
-            if !(1..=4096).contains(&token.len())
-                || !token.bytes().all(|byte| (33..=126).contains(&byte))
-            {
-                return Err(AuthError::Unauthorized);
-            }
-            let mut response = self
-                .client
-                .post(&self.url)
-                .json(&serde_json::json!({ "token": token, "app": app_key }))
-                .send()
-                .await
-                .map_err(|_| AuthError::Unavailable)?;
-            if response.status() != reqwest::StatusCode::OK {
-                return Err(AuthError::Unavailable);
-            }
-            let mut body = Vec::new();
-            loop {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => {
-                        body.extend_from_slice(&chunk);
-                        if body.len() > self.max_response_bytes {
-                            return Err(AuthError::Unavailable);
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(_) => return Err(AuthError::Unavailable),
-                }
-            }
-            let info: Value = serde_json::from_slice(&body).map_err(|_| AuthError::Unauthorized)?;
+            let info = self.post(token, Some(app_key)).await?;
             self.parse(&info, app_key)
         })
+    }
+
+    /// `POST {"token": …}` — the reference's raw introspection (`licenses.py:162-210`).
+    fn introspect_raw<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenceApp, AuthError>> {
+        Box::pin(async move { self.parse_any(&self.post(token, None).await?) })
+    }
+
+    /// One bounded introspection call; `app_key` is omitted from the body when absent.
+    async fn post(&self, token: &str, app_key: Option<&str>) -> Result<Value, AuthError> {
+        if !(1..=4096).contains(&token.len())
+            || !token.bytes().all(|byte| (33..=126).contains(&byte))
+        {
+            return Err(AuthError::Unauthorized);
+        }
+        let body = match app_key {
+            Some(app_key) => serde_json::json!({ "token": token, "app": app_key }),
+            None => serde_json::json!({ "token": token }),
+        };
+        let mut response = self
+            .client
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| AuthError::Unavailable)?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(AuthError::Unavailable);
+        }
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    body.extend_from_slice(&chunk);
+                    if body.len() > self.max_response_bytes {
+                        return Err(AuthError::Unavailable);
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => return Err(AuthError::Unavailable),
+            }
+        }
+        serde_json::from_slice(&body).map_err(|_| AuthError::Unauthorized)
     }
 }
 
@@ -220,5 +281,12 @@ impl LicenceAuthority for HttpLicenceAuthority {
         app_key: &'a str,
     ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
         self.introspect(token, app_key)
+    }
+
+    fn introspect_any<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenceApp, AuthError>> {
+        self.introspect_raw(token)
     }
 }

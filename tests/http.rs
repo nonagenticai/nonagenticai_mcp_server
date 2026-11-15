@@ -18,8 +18,8 @@ use tower::ServiceExt;
 
 use mcp_server_rs::auth::pg_bindings::PgBindingAuthority;
 use mcp_server_rs::auth::{
-    Auth, AuthConfig, AuthError, Binding, BindingAuthority, BoxFuture, LicenceAuthority,
-    LicenseIdentity, Rfc4122Uuid, SubjectKind,
+    Auth, AuthConfig, AuthError, Binding, BindingAuthority, BoxFuture, LicenceApp,
+    LicenceAuthority, LicenseIdentity, Rfc4122Uuid, SubjectKind,
 };
 use mcp_server_rs::tenant::TenantId;
 use mcp_server_rs::{AppState, app_with_auth, openapi};
@@ -57,6 +57,17 @@ fn state() -> AppState {
 /// test file's subject; these tests only need an authenticated caller).
 struct TestLicence;
 
+impl TestLicence {
+    fn identity() -> Option<LicenseIdentity> {
+        Some(LicenseIdentity {
+            tenant_id: Rfc4122Uuid::parse(TENANT)?,
+            license_id: Rfc4122Uuid::parse("01900000-0000-7000-8000-0000000000aa")?,
+            subject: "svc:test:mcp".into(),
+            subject_kind: Some(SubjectKind::Tenant),
+        })
+    }
+}
+
 impl LicenceAuthority for TestLicence {
     fn authenticate<'a>(
         &'a self,
@@ -66,12 +77,23 @@ impl LicenceAuthority for TestLicence {
             if token != LICENCE_TOKEN {
                 return Err(AuthError::Unauthorized);
             }
-            Ok(LicenseIdentity {
-                tenant_id: Rfc4122Uuid::parse(TENANT).expect("static uuid"),
-                license_id: Rfc4122Uuid::parse("01900000-0000-7000-8000-0000000000aa")
-                    .expect("static uuid"),
-                subject: "svc:test:mcp".into(),
-                subject_kind: Some(SubjectKind::Tenant),
+            Ok(Self::identity().expect("static identity"))
+        })
+    }
+
+    /// The reference's raw introspection: this licence's application key, which decides whether
+    /// a caller with no binding is a builtin caller (care-bus) or refused (mcp).
+    fn introspect_any<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenceApp, AuthError>> {
+        Box::pin(async move {
+            if token != LICENCE_TOKEN {
+                return Err(AuthError::Unauthorized);
+            }
+            Ok(LicenceApp {
+                app: "mcp".into(),
+                identity: Self::identity().expect("static identity"),
             })
         })
     }
@@ -511,6 +533,90 @@ async fn mcp_tools_list_refuses_a_stale_binding_revision() {
 #[tokio::test]
 async fn mcp_tools_list_requires_a_binding_credential() {
     // The middleware refuses before any handler or database read: no binding token, no listing.
+    // This is an `mcp` licence, so the non-binding branch refuses it — "an mcp licence needs
+    // X-MCP-Binding"; only the care-bus application key has a builtin scope.
     let (status, _, _) = support::mcp_post(&authed_app(), None, tools_list(None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// A licence whose application key is `care-bus` — the one application with a builtin scope.
+struct CareBusLicence;
+
+impl LicenceAuthority for CareBusLicence {
+    fn authenticate<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenseIdentity, AuthError>> {
+        Box::pin(async move {
+            if token != LICENCE_TOKEN {
+                return Err(AuthError::Unauthorized);
+            }
+            Ok(LicenseIdentity {
+                tenant_id: Rfc4122Uuid::parse(TENANT).expect("static uuid"),
+                license_id: Rfc4122Uuid::parse("01900000-0000-7000-8000-0000000000aa")
+                    .expect("static uuid"),
+                subject: format!("svc:{TENANT}:care-bus"),
+                subject_kind: Some(SubjectKind::Tenant),
+            })
+        })
+    }
+
+    fn introspect_any<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenceApp, AuthError>> {
+        Box::pin(async move {
+            let identity = self.authenticate(token).await?;
+            Ok(LicenceApp {
+                app: "care-bus".into(),
+                identity,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_care_bus_licence_without_a_binding_lists_the_builtin_tools() {
+    // The live builtin surface: a tenant's care-bus licence, no X-MCP-Binding, `tools/list` on
+    // `/mcp`. Before the non-binding branch existed this was 401 and the 34 first-party tools
+    // served no caller at all.
+    let mut auth = Auth::from_config(&AuthConfig::default()).expect("empty auth config is valid");
+    auth.licences = Arc::new(CareBusLicence);
+    auth.bindings = Arc::new(TestBindings);
+    let app = app_with_auth(state(), auth);
+    let (status, _, reply) = support::mcp_post(&app, None, tools_list(None)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let tools = reply["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no tool list: {reply}"));
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(names.contains(&"faq_ask"), "{names:?}");
+    assert!(names.contains(&"crm_verify_customer"), "{names:?}");
+    assert!(names.contains(&"web_scrape"), "{names:?}");
+    assert!(
+        !names.iter().any(|name| name.starts_with("builder_")),
+        "the builder is disabled and has no scope here: {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_care_bus_licence_without_a_binding_cannot_list_over_another_path() {
+    let mut auth = Auth::from_config(&AuthConfig::default()).expect("empty auth config is valid");
+    auth.licences = Arc::new(CareBusLicence);
+    auth.bindings = Arc::new(TestBindings);
+    let app = app_with_auth(state(), auth);
+    let resp = app
+        .oneshot(
+            Request::post("/mcp/available-tools")
+                .header("host", "127.0.0.1")
+                .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
