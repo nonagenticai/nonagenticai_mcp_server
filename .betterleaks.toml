@@ -253,3 +253,14 @@ regexes = ['''"key"\s*:\s*"s13\.[^"]*"''']
 description = "phase3b source-crypto test vector: sequential test key, synthetic token"
 paths = ['''^tests/fixtures/phase3b/crypto\.json$''']
 regexes = ['''"key(_padded)?"\s*:\s*"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=?"''']
+
+# Repo-specific: the phase 3C fixture records the exact `Authorization` header the n8n
+# adapter sends, which IS a JWT — but an HS256 one signed with the literal test key
+# `synthetic-webhook-secret` from `parity/tools/gen_phase3c_fixtures.py`. It authenticates to
+# nothing, and the fixture is only useful if it carries the oracle's real bytes.
+# The regex is the exact literal (fixed clock, fixed key), so a different — i.e. real —
+# token pasted into the same file is still flagged.
+[[allowlists]]
+description = "phase3c n8n webhook test vector: HS256 JWT signed with a synthetic key"
+paths = ['''^tests/fixtures/phase3c/oracle\.json$''']
+regexes = ['''"Authorization"\s*:\s*"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIwMThmMDAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMGFhYWEiLCJpYXQiOjE3NjMwMDAwMDAsImV4cCI6MTc2MzAwMDEyMH0\.[A-Za-z0-9_-]+"''']

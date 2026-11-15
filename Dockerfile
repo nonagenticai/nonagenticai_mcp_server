@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked \
     && install -D -m 0755 target/release/mcp-server-rs /out/service \
-    && install -D -m 0755 target/release/mcp-worker /out/worker
+    && install -D -m 0755 target/release/mcp-worker /out/worker \
+    && install -D -m 0755 target/release/mcp-external-driver /out/external-driver
 
 FROM debian:12-slim AS runtime
 # ca-certificates: outbound https (rustls-native-certs). curl: the HEALTHCHECK.
@@ -41,6 +42,9 @@ COPY --from=build /out/service /usr/local/bin/mcp-server-rs
 # The executor binary. The deployment selects it by overriding the entrypoint; the service
 # binary remains the image's default command.
 COPY --from=build /out/worker /usr/local/bin/mcp-worker
+# The external driver binary (n8n and fr runtimes). Same posture: the deployment overrides the
+# entrypoint, and nothing else in the image changes.
+COPY --from=build /out/external-driver /usr/local/bin/mcp-external-driver
 # No port is baked in: BIND_ADDR (host:port) and DATABASE_URL are required at runtime and are
 # supplied by the deployment (which also maps the Service port).
 ENV RUST_LOG=info

@@ -58,6 +58,9 @@ pub struct TaskInputRow {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// The `status_message` cap (matches the column check in the baseline migration).
+const MESSAGE_LIMIT: usize = 512;
+
 /// The task input store: every call names its tenant, exactly as the reference.
 #[derive(Debug, Clone)]
 pub struct TaskInputRepository {
@@ -185,6 +188,91 @@ impl TaskInputRepository {
         }
         tx.commit().await?;
         Ok(answered)
+    }
+
+    /// The reference's `claim_answered`: answered inputs awaiting forwarding, oldest first.
+    ///
+    /// Delivery is at-least-once: the row locks are released when this returns, so a crash
+    /// between forwarding and [`Self::mark_forwarded`] re-forwards, and the upstream must
+    /// dedupe on `source_ref`.
+    pub async fn claim_answered(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<TaskInputRow>, ExecutionStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query(
+            "SELECT input_key, tenant_id::text AS tenant_id, run_id::text AS run_id, source_ref, \
+             request, state, response, actor, \
+             (extract(epoch FROM created_at) * 1000000)::bigint AS created_at_us, \
+             (extract(epoch FROM answered_at) * 1000000)::bigint AS answered_at_us, \
+             (extract(epoch FROM closed_at) * 1000000)::bigint AS closed_at_us, \
+             (extract(epoch FROM expires_at) * 1000000)::bigint AS expires_at_us \
+             FROM public.mcp_task_inputs \
+             WHERE state = 'answered' \
+             ORDER BY answered_at, input_key LIMIT $1 FOR UPDATE SKIP LOCKED",
+        )
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.iter().map(decode_input).collect()
+    }
+
+    /// The reference's `reopen`: the upstream refused a forwarded answer, so open the input
+    /// again and tell the client why.
+    ///
+    /// Only an `answered` row changes. When it did, the run's status message is replaced unless
+    /// the run is already terminal (nothing will read the hint then).
+    pub async fn reopen(&self, input_key: &str, message: &str) -> Result<(), ExecutionStoreError> {
+        let mut tx = self.pool.begin().await?;
+        let reopened: Option<(String, String)> = sqlx::query_as(
+            "UPDATE public.mcp_task_inputs \
+             SET state = 'open', response = NULL, actor = NULL, answered_at = NULL \
+             WHERE input_key = $1 AND state = 'answered' \
+             RETURNING tenant_id::text, run_id::text",
+        )
+        .bind(input_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((tenant, run_id)) = reopened {
+            let run: Option<String> = sqlx::query_scalar(
+                "SELECT status FROM public.mcp_runs \
+                 WHERE tenant_id = $1::uuid AND run_id = $2::uuid FOR UPDATE",
+            )
+            .bind(&tenant)
+            .bind(&run_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(status) = run {
+                let status = RunStatus::parse(&status).ok_or_else(|| corrupt("run status"))?;
+                if !status.is_terminal() {
+                    let message: String = message.chars().take(MESSAGE_LIMIT).collect();
+                    sqlx::query(
+                        "UPDATE public.mcp_runs SET status_message = $1 \
+                         WHERE tenant_id = $2::uuid AND run_id = $3::uuid",
+                    )
+                    .bind(message)
+                    .bind(&tenant)
+                    .bind(&run_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The reference's `mark_forwarded`: the upstream took the answer; nothing re-sends it.
+    pub async fn mark_forwarded(&self, input_key: &str) -> Result<(), ExecutionStoreError> {
+        sqlx::query(
+            "UPDATE public.mcp_task_inputs SET state = 'forwarded' \
+             WHERE input_key = $1 AND state = 'answered'",
+        )
+        .bind(input_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

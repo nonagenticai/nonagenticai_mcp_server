@@ -319,7 +319,7 @@ impl ExecutionSettings {
 /// validates its cross-setting rules at startup; [`WorkerSettings::validate`] mirrors them and
 /// adds the worker-start rule that a process needs an explicit credential source
 /// (`src/execution/worker.py:run`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WorkerSettings {
     /// `MCP_WORKER_PROBE_PORT` (1024 to 65535, default 8034): the worker's health probe port.
     pub probe_port: u16,
@@ -412,6 +412,68 @@ pub struct WorkerSettings {
     pub builder_source_concurrency: u32,
     /// `MCP_BUILDER_SERVICE_LIMITS_FILE` (optional): the per-service builder rate-limit table.
     pub service_limits_file: Option<PathBuf>,
+}
+
+/// One field of this struct is a secret (`source_secret_key`, the AES-256-GCM source key; the
+/// reference declares it `SecretStr`), so `Debug` is written by hand: a stray `?settings` must
+/// not print it. Every other field is ordinary configuration.
+impl std::fmt::Debug for WorkerSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkerSettings")
+            .field("probe_port", &self.probe_port)
+            .field("max_inflight", &self.max_inflight)
+            .field("global_slots", &self.global_slots)
+            .field("per_tenant_slots", &self.per_tenant_slots)
+            .field("run_start_timeout", &self.run_start_timeout)
+            .field("run_max", &self.run_max)
+            .field("lease", &self.lease)
+            .field("heartbeat", &self.heartbeat)
+            .field("reconcile", &self.reconcile)
+            .field("api_max_inflight", &self.api_max_inflight)
+            .field("api_concurrency_global", &self.api_concurrency_global)
+            .field(
+                "api_concurrency_per_service",
+                &self.api_concurrency_per_service,
+            )
+            .field("api_max_calls_per_minute", &self.api_max_calls_per_minute)
+            .field("max_api_calls_per_run", &self.max_api_calls_per_run)
+            .field("api_timeout", &self.api_timeout)
+            .field("api_max_response_bytes", &self.api_max_response_bytes)
+            .field("max_frame_bytes", &self.max_frame_bytes)
+            .field("max_output_bytes", &self.max_output_bytes)
+            .field("max_log_bytes", &self.max_log_bytes)
+            .field("max_frames", &self.max_frames)
+            .field("run_namespace", &self.run_namespace)
+            .field("kata_runtime_class", &self.kata_runtime_class)
+            .field("runner_image_digest", &self.runner_image_digest)
+            .field("approved_runner_images", &self.approved_runner_images)
+            .field("run_memory_request_mi", &self.run_memory_request_mi)
+            .field("run_memory_limit_mi", &self.run_memory_limit_mi)
+            .field("run_cpu_request", &self.run_cpu_request)
+            .field("run_cpu_limit", &self.run_cpu_limit)
+            .field("credential_bundle_file", &self.credential_bundle_file)
+            .field("licence_minter", &self.licence_minter)
+            .field(
+                "source_secret_key",
+                &self.source_secret_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("source_allowed_hosts", &self.source_allowed_hosts)
+            .field(
+                "builder_oauth_token_max_ttl",
+                &self.builder_oauth_token_max_ttl,
+            )
+            .field(
+                "builder_source_calls_per_minute",
+                &self.builder_source_calls_per_minute,
+            )
+            .field(
+                "builder_source_concurrency",
+                &self.builder_source_concurrency,
+            )
+            .field("service_limits_file", &self.service_limits_file)
+            .finish()
+    }
 }
 
 impl Default for WorkerSettings {
@@ -649,6 +711,138 @@ impl WorkerSettings {
             });
         }
         Ok(())
+    }
+}
+
+/// The external driver's settings: the reference's one `Settings` object, split the way this
+/// crate already splits it, plus the settings only the driver reads.
+///
+/// The reference runs `src.external.driver` with the *same* `Settings` the worker loads, so
+/// [`ExternalDriverSettings::worker`] and [`ExternalDriverSettings::execution`] are reused
+/// unchanged (including `WorkerSettings::validate`, which the reference applies to every process).
+/// Env names carry the reference's `MCP_` prefix; the three fr advisory settings keep their
+/// unprefixed names because the reference gives them an explicit `validation_alias`, which
+/// overrides pydantic's `env_prefix`.
+#[derive(Clone, PartialEq)]
+pub struct ExternalDriverSettings {
+    /// The worker settings the driver shares with the Kata executor.
+    pub worker: WorkerSettings,
+    /// The queue, timeout and retention bounds the driver shares with the API.
+    pub execution: ExecutionSettings,
+    /// `EXECUTION_ENABLED`/`MCP_EXECUTION_ENABLED`: the driver refuses to start without it.
+    pub execution_enabled: bool,
+    /// `MCP_EXTERNAL_RUN_MAX_SECONDS` (60 to 2592000, default 604800): the deadline for one
+    /// external run. Deliberately not [`WorkerSettings::run_max`], whose ceiling is 300 s.
+    pub run_max: Duration,
+    /// `MCP_EXTERNAL_ACTIVE_MAX` (1 to 10000, default 100): every external run this process
+    /// may own, in any of `starting`/`running`/`cancelling`.
+    pub active_max: u32,
+    /// `MCP_EXTERNAL_CONCURRENCY` (1 to 256, default 32): adapter calls in flight at once.
+    pub concurrency: u32,
+    /// `MCP_EXTERNAL_PROBE_PORT` (1024 to 65535, default 8036): the internal probe port.
+    pub probe_port: u16,
+    /// `MCP_N8N_BASE_URL`: the n8n API base (execution reads and stops).
+    pub n8n_base_url: Option<String>,
+    /// `MCP_N8N_WEBHOOK_BASE_URL`: the base a workflow start posts to.
+    pub n8n_webhook_base_url: Option<String>,
+    /// `MCP_N8N_API_KEY`: the `X-N8N-API-KEY` every execution read carries. Never logged.
+    pub n8n_api_key: Option<String>,
+    /// `MCP_N8N_WEBHOOK_SECRET`: the HS256 key a start JWT is signed with. Never logged.
+    pub n8n_webhook_secret: Option<String>,
+    /// `MCP_N8N_UNKNOWN_STATUS_LIMIT` (1 to 1000, default 10): consecutive `unknown` statuses
+    /// after which the run fails rather than polling forever.
+    pub n8n_unknown_status_limit: u32,
+    /// `MCP_FR_BASE_URL`: the fr backend base.
+    pub fr_base_url: Option<String>,
+    /// `MCP_FR_CHANNEL_SECRET`: the HMAC key every channel message is signed with. Never logged.
+    pub fr_channel_secret: Option<String>,
+}
+
+/// Three of this struct's fields are secrets, so the hands-off `Debug` is written by hand: a
+/// stray `?settings` (or `tracing::debug!(?settings)`) must not print them.
+impl std::fmt::Debug for ExternalDriverSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redacted = |value: &Option<String>| value.as_ref().map(|_| "<redacted>");
+        formatter
+            .debug_struct("ExternalDriverSettings")
+            .field("worker", &self.worker)
+            .field("execution", &self.execution)
+            .field("execution_enabled", &self.execution_enabled)
+            .field("run_max", &self.run_max)
+            .field("active_max", &self.active_max)
+            .field("concurrency", &self.concurrency)
+            .field("probe_port", &self.probe_port)
+            .field("n8n_base_url", &self.n8n_base_url)
+            .field("n8n_webhook_base_url", &self.n8n_webhook_base_url)
+            .field("n8n_api_key", &redacted(&self.n8n_api_key))
+            .field("n8n_webhook_secret", &redacted(&self.n8n_webhook_secret))
+            .field("n8n_unknown_status_limit", &self.n8n_unknown_status_limit)
+            .field("fr_base_url", &self.fr_base_url)
+            .field("fr_channel_secret", &redacted(&self.fr_channel_secret))
+            .finish()
+    }
+}
+
+impl Default for ExternalDriverSettings {
+    fn default() -> Self {
+        Self {
+            worker: WorkerSettings::default(),
+            execution: ExecutionSettings::default(),
+            execution_enabled: false,
+            run_max: Duration::from_secs(604_800),
+            active_max: 100,
+            concurrency: 32,
+            probe_port: 8_036,
+            n8n_base_url: None,
+            n8n_webhook_base_url: None,
+            n8n_api_key: None,
+            n8n_webhook_secret: None,
+            n8n_unknown_status_limit: 10,
+            fr_base_url: None,
+            fr_channel_secret: None,
+        }
+    }
+}
+
+impl ExternalDriverSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`ExternalDriverSettings::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let worker = WorkerSettings::from_lookup(get)?;
+        let execution = ExecutionSettings::from_lookup(get)?;
+        let settings = Self {
+            worker,
+            execution,
+            execution_enabled: execution_enabled_setting(&get)?,
+            run_max: Duration::from_secs(u64_setting(
+                &get,
+                "MCP_EXTERNAL_RUN_MAX_SECONDS",
+                604_800,
+                60,
+                2_592_000,
+            )?),
+            active_max: u32_setting(&get, "MCP_EXTERNAL_ACTIVE_MAX", 100, 1, 10_000)?,
+            concurrency: u32_setting(&get, "MCP_EXTERNAL_CONCURRENCY", 32, 1, 256)?,
+            probe_port: u16_setting(&get, "MCP_EXTERNAL_PROBE_PORT", 8_036, 1_024, 65_535)?,
+            n8n_base_url: get("MCP_N8N_BASE_URL"),
+            n8n_webhook_base_url: get("MCP_N8N_WEBHOOK_BASE_URL"),
+            n8n_api_key: get("MCP_N8N_API_KEY"),
+            n8n_webhook_secret: get("MCP_N8N_WEBHOOK_SECRET"),
+            n8n_unknown_status_limit: u32_setting(
+                &get,
+                "MCP_N8N_UNKNOWN_STATUS_LIMIT",
+                10,
+                1,
+                1_000,
+            )?,
+            fr_base_url: get("MCP_FR_BASE_URL"),
+            fr_channel_secret: get("MCP_FR_CHANNEL_SECRET"),
+        };
+        Ok(settings)
     }
 }
 
@@ -2326,5 +2520,110 @@ mod tests {
                 .len(),
             256
         );
+    }
+
+    fn driver_settings(pairs: &[(&str, &str)]) -> Result<ExternalDriverSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        ExternalDriverSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn external_driver_settings_carry_the_reference_defaults() {
+        let settings = driver_settings(&[]).expect("defaults parse");
+        assert_eq!(settings.run_max, Duration::from_secs(604_800));
+        assert_eq!(settings.active_max, 100);
+        assert_eq!(settings.concurrency, 32);
+        assert_eq!(settings.probe_port, 8_036);
+        assert_eq!(settings.n8n_unknown_status_limit, 10);
+        assert_eq!(settings.n8n_base_url, None);
+        assert_eq!(settings.fr_base_url, None);
+        assert_eq!(settings.fr_channel_secret, None);
+        // The driver's ceiling is its own: `MCP_RUN_MAX_SECONDS` tops out at 300 s.
+        assert_eq!(settings.execution.external_poll_seconds, 5.0);
+    }
+
+    #[test]
+    fn external_driver_settings_read_their_own_names() {
+        let settings = driver_settings(&[
+            ("MCP_EXTERNAL_RUN_MAX_SECONDS", "120"),
+            ("MCP_EXTERNAL_ACTIVE_MAX", "7"),
+            ("MCP_EXTERNAL_CONCURRENCY", "3"),
+            ("MCP_EXTERNAL_PROBE_PORT", "9000"),
+            ("MCP_N8N_BASE_URL", "http://n8n.test:5678"),
+            ("MCP_N8N_WEBHOOK_BASE_URL", "http://n8n.test:5678"),
+            ("MCP_N8N_API_KEY", "key"),
+            ("MCP_N8N_WEBHOOK_SECRET", "secret"),
+            ("MCP_N8N_UNKNOWN_STATUS_LIMIT", "4"),
+            ("MCP_FR_BASE_URL", "http://fr.test:8888"),
+            ("MCP_FR_CHANNEL_SECRET", "channel"),
+        ])
+        .expect("settings parse");
+        assert_eq!(settings.run_max, Duration::from_secs(120));
+        assert_eq!(settings.active_max, 7);
+        assert_eq!(settings.concurrency, 3);
+        assert_eq!(settings.probe_port, 9_000);
+        assert_eq!(settings.n8n_unknown_status_limit, 4);
+        assert_eq!(
+            settings.n8n_webhook_base_url.as_deref(),
+            Some("http://n8n.test:5678")
+        );
+        assert_eq!(settings.fr_channel_secret.as_deref(), Some("channel"));
+        // The probe port is the driver's own name, never the worker's 8034.
+        assert_eq!(settings.worker.probe_port, 8_034);
+    }
+
+    #[test]
+    fn the_driver_settings_redact_every_secret() {
+        // Built here rather than written as a literal: the source key is a 32-byte AES key and
+        // a base64url constant in the tree would (rightly) trip the secret scanner.
+        use base64::Engine as _;
+        let source_key =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode((0u8..32).collect::<Vec<u8>>());
+        let settings = driver_settings(&[
+            ("MCP_N8N_API_KEY", "n8n-api-key-value"),
+            ("MCP_N8N_WEBHOOK_SECRET", "n8n-webhook-secret-value"),
+            ("MCP_FR_CHANNEL_SECRET", "fr-channel-secret-value"),
+            ("MCP_SOURCE_SECRET_KEY", source_key.as_str()),
+        ])
+        .expect("settings parse");
+        let debug = format!("{settings:?}");
+        for (index, secret) in [
+            "n8n-api-key-value",
+            "n8n-webhook-secret-value",
+            "fr-channel-secret-value",
+            source_key.as_str(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // The message names the FIELD, never the value: an assertion that embeds a secret is
+            // itself a cleartext write (CodeQL's "cleartext logging of sensitive information").
+            assert!(!debug.contains(secret), "secret #{index} reached Debug");
+        }
+        assert!(debug.contains("<redacted>"), "{debug}");
+    }
+
+    #[test]
+    fn external_driver_settings_refuse_out_of_range_values() {
+        for (name, value) in [
+            ("MCP_EXTERNAL_RUN_MAX_SECONDS", "59"),
+            ("MCP_EXTERNAL_RUN_MAX_SECONDS", "2592001"),
+            ("MCP_EXTERNAL_ACTIVE_MAX", "0"),
+            ("MCP_EXTERNAL_ACTIVE_MAX", "10001"),
+            ("MCP_EXTERNAL_CONCURRENCY", "0"),
+            ("MCP_EXTERNAL_CONCURRENCY", "257"),
+            ("MCP_EXTERNAL_PROBE_PORT", "1023"),
+            ("MCP_EXTERNAL_PROBE_PORT", "65536"),
+            ("MCP_N8N_UNKNOWN_STATUS_LIMIT", "0"),
+            ("MCP_N8N_UNKNOWN_STATUS_LIMIT", "1001"),
+        ] {
+            assert!(
+                driver_settings(&[(name, value)]).is_err(),
+                "{name}={value} must be refused"
+            );
+        }
     }
 }
