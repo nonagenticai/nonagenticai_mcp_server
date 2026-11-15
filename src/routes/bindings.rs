@@ -1,7 +1,9 @@
-//! The five tenant binding operations under `/mcp/bindings`.
+//! The five tenant binding operations under `/mcp/bindings` and the three credential-profile
+//! operations under `/mcp/credential-profiles`.
 //!
 //! Ported from the reference `src/routers/bindings.py` (`create_binding`, `inspect_binding`,
-//! `update_binding`, `rotate_binding`, `revoke_binding`). The reference reads every body through
+//! `update_binding`, `rotate_binding`, `revoke_binding`, `create_profile`, `update_profile`,
+//! `validate_profile`). The reference reads every body through
 //! `Depends(json_contract(Model))`, so FastAPI declares NO request body and NO response model:
 //! the OpenAPI annotations below carry no `request_body`, every success response declares the
 //! empty `{}` schema (`AnyJson`), and each operation with a path parameter declares the
@@ -21,14 +23,16 @@ use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::AppState;
 use crate::auth::{AuthPrincipal, Principal};
-use crate::catalog::ids::{AuthorityId, Uuid7};
+use crate::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
 use crate::catalog::toolkit_models::{
-    BindingDescriptor, BindingSpec, BindingUpdate, RevisionRequest,
+    BindingDescriptor, BindingSpec, BindingUpdate, CredentialProfile, ProfileUpdate,
+    RevisionRequest,
 };
 use crate::routes::health::AnyJson;
 use crate::routes::tools::HTTPValidationError;
@@ -112,6 +116,24 @@ fn token_response(status: StatusCode, descriptor: BindingDescriptor, token: Stri
         Json(json!({ "binding": descriptor, "token": token })),
     )
         .into_response()
+}
+
+/// A successful profile write: the reference returns the profile, its new revision and the
+/// constant (credentials are never verified by this service).
+#[derive(Debug, Serialize)]
+struct ProfileWriteResponse<'a> {
+    profile: &'a CredentialProfile,
+    revision: PositiveVersion,
+    credentials_verified: bool,
+}
+
+/// The reference's `validate_profile` result: the stored revision, never a credential value.
+#[derive(Debug, Serialize)]
+struct ProfileValidation<'a> {
+    profile_id: &'a Uuid7,
+    revision: PositiveVersion,
+    metadata_valid: bool,
+    credentials_verified: bool,
 }
 
 // ── handlers ──────────────────────────────────────────────────────────────────────────────
@@ -245,6 +267,117 @@ pub async fn revoke_binding(
     Ok(descriptor_response(StatusCode::OK, descriptor))
 }
 
+/// Create a tenant credential profile at revision one.
+#[utoipa::path(
+    post,
+    path = "/mcp/credential-profiles",
+    tag = "bindings",
+    responses((status = 201, description = "Successful Response", body = AnyJson))
+)]
+pub async fn create_profile(
+    State(state): State<AppState>,
+    principal: AuthPrincipal,
+    body: RawBody,
+) -> Result<Response, BindingError> {
+    let principal = require_management(principal)?;
+    let profile: CredentialProfile = parse_body(&body)?;
+    let (profile, revision) = service(&state)
+        .profile_write(&principal, &profile, None)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(ProfileWriteResponse {
+            profile: &profile,
+            revision,
+            credentials_verified: false,
+        }),
+    )
+        .into_response())
+}
+
+/// Replace a credential profile at an expected revision. A name change is refused.
+#[utoipa::path(
+    put,
+    path = "/mcp/credential-profiles/{identity}",
+    tag = "bindings",
+    params(("identity" = String, Path, format = "uuid7")),
+    responses(
+        (status = 200, description = "Successful Response", body = AnyJson),
+        (status = 422, description = "Validation Error", body = HTTPValidationError)
+    )
+)]
+pub async fn update_profile(
+    State(state): State<AppState>,
+    principal: AuthPrincipal,
+    Path(identity): Path<String>,
+    body: RawBody,
+) -> Result<Response, BindingError> {
+    let principal = require_management(principal)?;
+    let identity = Uuid7::new(identity).map_err(|_| BindingError::Invalid)?;
+    let payload: ProfileUpdate = parse_body(&body)?;
+    if payload.profile.profile_id != identity {
+        return Err(ToolkitServiceError::Invalid("profile identity mismatch").into());
+    }
+    let (profile, revision) = service(&state)
+        .profile_write(
+            &principal,
+            &payload.profile,
+            Some(payload.expected_revision),
+        )
+        .await?;
+    Ok((
+        StatusCode::OK,
+        Json(ProfileWriteResponse {
+            profile: &profile,
+            revision,
+            credentials_verified: false,
+        }),
+    )
+        .into_response())
+}
+
+/// Revalidate a stored credential profile. Credential values are never read or returned.
+#[utoipa::path(
+    post,
+    path = "/mcp/credential-profiles/{identity}/validate",
+    tag = "bindings",
+    params(("identity" = String, Path, format = "uuid7")),
+    responses(
+        (status = 200, description = "Successful Response", body = AnyJson),
+        (status = 422, description = "Validation Error", body = HTTPValidationError)
+    )
+)]
+pub async fn validate_profile(
+    State(state): State<AppState>,
+    principal: AuthPrincipal,
+    Path(identity): Path<String>,
+) -> Result<Response, BindingError> {
+    let principal = require_management(principal)?;
+    let identity = Uuid7::new(identity).map_err(|_| BindingError::Invalid)?;
+    let mut connection = state.pool.acquire().await.map_err(|error| {
+        tracing::error!(%error, "credential profile database failure");
+        BindingError::Internal
+    })?;
+    let row = binding_store::profile_row(
+        &mut connection,
+        &tenant_id(&principal),
+        &identity,
+        false,
+        false,
+    )
+    .await?;
+    if state.license_app_key.as_deref() != Some(row.profile.gateway.app_key.as_str()) {
+        return Err(ToolkitServiceError::Invalid("gateway application mismatch").into());
+    }
+    Ok(Json(ProfileValidation {
+        profile_id: &identity,
+        revision: stored_revision(row.revision)?,
+        metadata_valid: true,
+        credentials_verified: false,
+    })
+    .into_response())
+}
+
 // ── handler helpers ──────────────────────────────────────────────────────────────────────
 
 /// The middleware only ever raises a management principal on a management path; a handler
@@ -281,4 +414,13 @@ fn platform_tenant() -> AuthorityId {
 
 fn parse_body<T: DeserializeOwned>(body: &RawBody) -> Result<T, BindingError> {
     serde_json::from_slice(body).map_err(|_| BindingError::Invalid)
+}
+
+/// A stored revision as the model type. The column is `bigint`; a value outside the positive
+/// range is a corrupt row, never the caller's mistake.
+fn stored_revision(value: i64) -> Result<PositiveVersion, BindingError> {
+    u64::try_from(value)
+        .ok()
+        .and_then(|value| PositiveVersion::new(value).ok())
+        .ok_or(BindingError::Internal)
 }

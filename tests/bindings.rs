@@ -161,7 +161,11 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let name = format!("mcp_bindings_{}_{nanos}", std::process::id());
+        // A process-wide counter disambiguates two tests that read the clock in the
+        // same tick: `SystemTime` resolution is coarser than parallel threads need.
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("mcp_bindings_{}_{nanos}_{sequence}", std::process::id());
         sqlx::query(AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
             .execute(&mut admin)
             .await

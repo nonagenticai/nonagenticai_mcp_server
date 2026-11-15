@@ -393,6 +393,16 @@ pub struct BindingUpdate {
     pub spec: BindingSpec,
 }
 
+/// Replace a credential profile at an expected revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileUpdate {
+    /// The revision the caller last read.
+    pub expected_revision: PositiveVersion,
+    /// The replacement profile.
+    pub profile: CredentialProfile,
+}
+
 /// Replace a toolkit's manifest at an expected revision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

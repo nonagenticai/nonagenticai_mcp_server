@@ -11,4 +11,7 @@ pub mod run_activity;
 pub mod task_inputs;
 pub mod toolkits;
 
-pub use catalog::{AppendRequest, CatalogRepository, CatalogStoreError, ToolDefinition};
+pub use catalog::{
+    AppendRequest, CatalogRepository, CatalogStoreError, PlatformCatalogRepository,
+    PlatformDefinition, PlatformKind, PlatformStoreError, ToolDefinition,
+};
