@@ -1,12 +1,15 @@
 //! Configuration from the environment. Nothing has a default port: the deployment sets
 //! `BIND_ADDR` explicitly, so the binary never guesses one.
 
+use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
+use regex::Regex;
 
 use crate::auth::uuid::Rfc4122Uuid;
 
@@ -82,6 +85,13 @@ impl Config {
                 reason: format!("{v:?} is not an RFC 4122 UUID"),
             })?,
         };
+        // The reference's startup rule (`config.py:350`): the reserved tenant is UUIDv7.
+        if platform_tenant_id.to_string().as_bytes().get(14) != Some(&b'7') {
+            return Err(ConfigError::Invalid {
+                name: "PLATFORM_TENANT_ID",
+                reason: "the platform tenant identity must be UUIDv7".into(),
+            });
+        }
         let catalog_page_size = u32_setting(&get, "CATALOG_PAGE_SIZE", 10, 1, 100)?;
         Ok(Self {
             database_url,
@@ -1035,6 +1045,162 @@ impl MinterSettings {
     }
 }
 
+/// The default `MCP_BINDING_PRODUCTS`: which platform toolkits each product's binding pins
+/// (reference `DEFAULT_PRODUCT_TOOLKITS`, `config.py:14-18`).
+pub const DEFAULT_PRODUCT_TOOLKITS: &[(&str, &[&str])] = &[
+    ("agent", &["coding", "knowledge", "cases", "rules", "fr"]),
+    (
+        "care-bus",
+        &["care_bus_ops", "knowledge", "research", "legal"],
+    ),
+];
+
+/// The default `MCP_PRODUCT_BUNDLES`: the licences bundle each product's backend credentials
+/// are minted in (reference `DEFAULT_PRODUCT_BUNDLES`, `config.py:22`).
+pub const DEFAULT_PRODUCT_BUNDLES: &[(&str, &str)] =
+    &[("agent", "agent"), ("care-bus", "care-bus")];
+
+/// The reference's `PRODUCT_PATTERN` (`config.py:28`): the `product` a product caller names.
+const PRODUCT_PATTERN: &str = r"^[a-z][a-z0-9-]{0,47}$";
+/// The reference's `TOOLKIT_NAME_PATTERN` (`config.py:30`): a toolkit named in the product table.
+const TOOLKIT_NAME_PATTERN: &str = r"^[a-z][a-z0-9_]{0,63}$";
+/// The reference's `BUNDLE_PATTERN` (`config.py:29`): the licences bundle key a product names.
+const BUNDLE_PATTERN: &str = r"^[a-z][a-z0-9_-]{0,63}$";
+
+/// Whether `value` is a well-formed product key (reference `PRODUCT_PATTERN`).
+pub fn product_name(value: &str) -> bool {
+    static PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(PRODUCT_PATTERN).expect("product pattern is valid"));
+    PATTERN.is_match(value)
+}
+
+fn toolkit_name(value: &str) -> bool {
+    static PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(TOOLKIT_NAME_PATTERN).expect("toolkit name pattern is valid"));
+    PATTERN.is_match(value)
+}
+
+fn bundle_name(value: &str) -> bool {
+    static PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(BUNDLE_PATTERN).expect("bundle pattern is valid"));
+    PATTERN.is_match(value)
+}
+
+/// The product table `POST /mcp/internal/tenants/{t}/bindings/ensure` provisions: which
+/// platform toolkits a product's binding pins, which licences bundle its backend credentials
+/// come from, and how long the binding lives.
+///
+/// The reference `Settings.binding_products` / `product_bundles` / `binding_ensure_ttl_days`
+/// (`config.py:215-219`) plus the minter those references are established with, validated by
+/// the same startup cross-checks (`config.py:336-350`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingEnsureSettings {
+    /// `MCP_BINDING_PRODUCTS` (JSON object, default [`DEFAULT_PRODUCT_TOOLKITS`]): product →
+    /// platform toolkit names. At most 64 products, 1 to 32 distinct names each.
+    pub products: BTreeMap<String, Vec<String>>,
+    /// `MCP_PRODUCT_BUNDLES` (JSON object, default [`DEFAULT_PRODUCT_BUNDLES`]): product →
+    /// licences bundle key. Every product needs one.
+    pub bundles: BTreeMap<String, String>,
+    /// `MCP_BINDING_ENSURE_TTL_DAYS` (1 to 3650, default 365): a provisioned binding's life.
+    pub ttl_days: u64,
+    /// The `MCP_LICENCE_MINTER_*` settings backend credentials are established with.
+    pub minter: MinterSettings,
+}
+
+impl Default for BindingEnsureSettings {
+    fn default() -> Self {
+        Self {
+            products: DEFAULT_PRODUCT_TOOLKITS
+                .iter()
+                .map(|(product, toolkits)| {
+                    (
+                        (*product).to_owned(),
+                        toolkits.iter().map(|name| (*name).to_owned()).collect(),
+                    )
+                })
+                .collect(),
+            bundles: DEFAULT_PRODUCT_BUNDLES
+                .iter()
+                .map(|(product, bundle)| ((*product).to_owned(), (*bundle).to_owned()))
+                .collect(),
+            ttl_days: 365,
+            minter: MinterSettings::default(),
+        }
+    }
+}
+
+impl BindingEnsureSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Testable core of [`BindingEnsureSettings::from_env`]. Empty values count as unset.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+        let products =
+            match get("MCP_BINDING_PRODUCTS") {
+                None => Self::default().products,
+                Some(raw) => serde_json::from_str::<BTreeMap<String, Vec<String>>>(&raw).map_err(
+                    |error| ConfigError::Invalid {
+                        name: "MCP_BINDING_PRODUCTS",
+                        reason: format!("expected a JSON object of toolkit-name lists: {error}"),
+                    },
+                )?,
+            };
+        let bundles = match get("MCP_PRODUCT_BUNDLES") {
+            None => Self::default().bundles,
+            Some(raw) => {
+                serde_json::from_str::<BTreeMap<String, String>>(&raw).map_err(|error| {
+                    ConfigError::Invalid {
+                        name: "MCP_PRODUCT_BUNDLES",
+                        reason: format!("expected a JSON object of bundle keys: {error}"),
+                    }
+                })?
+            }
+        };
+        let settings = Self {
+            products,
+            bundles,
+            ttl_days: u64_setting(&get, "MCP_BINDING_ENSURE_TTL_DAYS", 365, 1, 3_650)?,
+            minter: MinterSettings::from_lookup(|key| get(key))?,
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// The reference's startup cross-checks (`config.py:336-350`): a bounded product table of
+    /// pattern-valid, distinct toolkit names, and a licences bundle key for every product.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.products.len() > 64
+            || self.products.iter().any(|(product, toolkits)| {
+                let mut seen = HashSet::new();
+                !product_name(product)
+                    || toolkits.is_empty()
+                    || toolkits.len() > 32
+                    || !toolkits.iter().all(|name| seen.insert(name.as_str()))
+                    || toolkits.iter().any(|name| !toolkit_name(name))
+            })
+        {
+            return Err(ConfigError::Invalid {
+                name: "MCP_BINDING_PRODUCTS",
+                reason: "invalid product toolkit table".into(),
+            });
+        }
+        if self.products.keys().any(|product| {
+            !self
+                .bundles
+                .get(product)
+                .is_some_and(|bundle| bundle_name(bundle))
+        }) {
+            return Err(ConfigError::Invalid {
+                name: "MCP_PRODUCT_BUNDLES",
+                reason: "every product needs a licences bundle key".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// The `/mcp/internal/*` Keycloak service-token verifier (`MCP_INTERNAL_KEYCLOAK_*`).
 ///
 /// All four settings or none. All four unset ⇒ the verifier is off and every service token is
@@ -1162,6 +1328,10 @@ pub struct AuthConfig {
     /// `MCP_INTERNAL_KEYCLOAK_*`: the service-token verifier for `/mcp/internal/*`.
     /// `None` = off; a partial configuration is off as well ([`KeycloakSettings`]).
     pub keycloak: Option<KeycloakSettings>,
+    /// `MCP_BINDING_PRODUCTS` / `MCP_PRODUCT_BUNDLES` / `MCP_BINDING_ENSURE_TTL_DAYS` and the
+    /// licence minter: what `/mcp/internal/.../bindings/ensure` provisions
+    /// ([`BindingEnsureSettings`]).
+    pub binding_ensure: BindingEnsureSettings,
 }
 
 impl Default for AuthConfig {
@@ -1178,6 +1348,7 @@ impl Default for AuthConfig {
             platform_admin_key_file: None,
             max_management_bytes: 262_144,
             keycloak: None,
+            binding_ensure: BindingEnsureSettings::default(),
         }
     }
 }
@@ -1223,6 +1394,7 @@ impl AuthConfig {
                 1_048_576,
             )?,
             keycloak: KeycloakSettings::from_lookup(|key| get(key), license_allow_http)?,
+            binding_ensure: BindingEnsureSettings::from_lookup(|key| get(key))?,
         };
         config.validate()?;
         Ok(config)
@@ -1274,6 +1446,9 @@ impl AuthConfig {
                 reason: "platform authorization requires management authorization".into(),
             });
         }
+        // Hand-built settings (tests, a supervisor) cannot skip the reference's product-table
+        // cross-checks (`config.py:336-350`).
+        self.binding_ensure.validate()?;
         Ok(())
     }
 }
@@ -2925,5 +3100,122 @@ mod tests {
                 assert!(settings.is_err(), "{invalid} must be refused");
             }
         }
+    }
+
+    fn binding_settings(pairs: &[(&str, &str)]) -> Result<BindingEnsureSettings, ConfigError> {
+        let m: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        BindingEnsureSettings::from_lookup(|k| m.get(k).cloned())
+    }
+
+    #[test]
+    fn the_platform_tenant_must_be_uuidv7() {
+        let base = [("DATABASE_URL", "postgres://x"), ("BIND_ADDR", "0.0.0.0:9")];
+        let with = |tenant: &'static str| {
+            let mut pairs = base.to_vec();
+            pairs.push(("PLATFORM_TENANT_ID", tenant));
+            cfg(&pairs)
+        };
+        assert!(matches!(
+            with("5f868d42-03f8-41f0-a93c-3e83070dc196"),
+            Err(ConfigError::Invalid {
+                name: "PLATFORM_TENANT_ID",
+                ..
+            })
+        ));
+        assert!(with("01900000-0000-7000-8000-00000000f001").is_ok());
+    }
+
+    #[test]
+    fn binding_ensure_defaults_are_the_reference_product_tables() {
+        let defaults = BindingEnsureSettings::default();
+        assert_eq!(
+            defaults.products["agent"],
+            vec!["coding", "knowledge", "cases", "rules", "fr"]
+        );
+        assert_eq!(
+            defaults.products["care-bus"],
+            vec!["care_bus_ops", "knowledge", "research", "legal"]
+        );
+        assert_eq!(defaults.bundles["agent"], "agent");
+        assert_eq!(defaults.bundles["care-bus"], "care-bus");
+        assert_eq!(defaults.ttl_days, 365);
+        assert_eq!(binding_settings(&[]).unwrap(), defaults);
+    }
+
+    #[test]
+    fn binding_ensure_reads_json_tables_and_the_ttl() {
+        let settings = binding_settings(&[
+            ("MCP_BINDING_PRODUCTS", r#"{"agent":["fr","cases"]}"#),
+            ("MCP_PRODUCT_BUNDLES", r#"{"agent":"agent"}"#),
+            ("MCP_BINDING_ENSURE_TTL_DAYS", "30"),
+        ])
+        .unwrap();
+        assert_eq!(settings.products["agent"], vec!["fr", "cases"]);
+        assert_eq!(settings.ttl_days, 30);
+    }
+
+    #[test]
+    fn binding_ensure_refuses_an_invalid_product_table() {
+        let bundles = ("MCP_PRODUCT_BUNDLES", r#"{"agent":"agent"}"#);
+        for products in [
+            r#"{"agent":[]}"#,
+            r#"{"Agent":["fr"]}"#,
+            r#"{"agent":["fr","fr"]}"#,
+            r#"{"agent":["fr"],"bad product":["fr"]}"#,
+            r#"["fr"]"#,
+        ] {
+            let outcome = binding_settings(&[("MCP_BINDING_PRODUCTS", products), bundles]);
+            assert!(
+                matches!(
+                    outcome,
+                    Err(ConfigError::Invalid {
+                        name: "MCP_BINDING_PRODUCTS",
+                        ..
+                    })
+                ),
+                "{products}"
+            );
+        }
+        assert!(binding_settings(&[("MCP_BINDING_ENSURE_TTL_DAYS", "0")]).is_err());
+        assert!(binding_settings(&[("MCP_BINDING_ENSURE_TTL_DAYS", "3651")]).is_err());
+    }
+
+    #[test]
+    fn binding_ensure_needs_a_bundle_for_every_product() {
+        for bundles in [r#"{"care-bus":"care-bus"}"#, r#"{"agent":"Agent"}"#] {
+            let outcome = binding_settings(&[
+                ("MCP_BINDING_PRODUCTS", r#"{"agent":["fr"]}"#),
+                ("MCP_PRODUCT_BUNDLES", bundles),
+            ]);
+            assert!(
+                matches!(
+                    outcome,
+                    Err(ConfigError::Invalid {
+                        name: "MCP_PRODUCT_BUNDLES",
+                        ..
+                    })
+                ),
+                "{bundles}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_config_revalidates_a_hand_built_product_table() {
+        let mut config = AuthConfig::default();
+        config
+            .binding_ensure
+            .products
+            .insert("Agent".to_owned(), vec!["fr".to_owned()]);
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::Invalid {
+                name: "MCP_BINDING_PRODUCTS",
+                ..
+            })
+        ));
     }
 }

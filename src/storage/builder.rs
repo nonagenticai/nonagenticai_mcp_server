@@ -9,18 +9,21 @@
 //!
 //! The methods here are the SQL half of the reference's builder service: source→service
 //! agreement, service and operation creation/listing/update, platform-operation resolution and
-//! repinning, the tool lifecycle (create/append/get/list/publish/set-status) and the toolkit
-//! write/publish calls. Two reference operations are deliberately not here because they are not
-//! builder storage: `submit_draft`/`draft_run` (the execution repository's draft admission and
-//! trace) and `rebind` (the bindings-ensure service). The builder service card orchestrates
-//! those.
+//! repinning, the tool lifecycle (create/append/get/list/publish/set-status), the toolkit
+//! write/publish calls, and the author's draft test runs (`submit_draft`/`draft_run` — the
+//! reference's `ExecutionService.submit_draft`/`draft_run` over the execution repository's
+//! `accept_draft`/`get_draft`/`trace`). `rebind` is the bindings-ensure service's, ported in
+//! [`crate::storage::bindings_ensure`]: a toolkit publication that triggers it reports a
+//! re-bind failure and never rolls the already-committed publication back.
 //!
 //! Refusals keep the reference's exception split: `MB001`/`23505` are conflicts, `MB002` not
 //! found, `MB003` the quota, `MB004` the platform-tenant refusal, `23514`/`23503` invalid
 //! requests. Only the primary message is kept, never row detail.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlx::error::DatabaseError as _;
@@ -28,23 +31,34 @@ use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgConnection, PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
 
+use crate::auth::BoxFuture;
+use crate::auth::uuid::Rfc4122Uuid;
 use crate::builder::models::{OperationPatch, ToolOperation};
 use crate::builder::packaging;
-use crate::catalog::ids::{AuthorityId, Name, PositiveVersion, Uuid7};
+use crate::catalog::ids::{AppKey, AuthorityId, Name, PositiveVersion, Uuid7};
+use crate::catalog::instance::validate_instance;
 use crate::catalog::lifecycle::{VersionStatus, tool_transition_allowed};
 use crate::catalog::models::{
-    Attribution, ExactReference, OperationManifest, ServiceManifest, ToolManifest,
-    VersionDescriptor,
+    Attribution, AuthAdapter, Effect, ExactReference, OperationManifest, Runtime, ServiceManifest,
+    ToolLimits, ToolManifest, VersionDescriptor,
 };
 use crate::catalog::package::PackageFile;
-use crate::catalog::toolkit_models::ToolkitDescriptor;
+use crate::catalog::resolver::ResolvedTool;
+use crate::catalog::toolkit_models::{
+    BoundContext, CredentialProfile, CredentialReference, EffectiveTool, ToolReference,
+    ToolkitDescriptor,
+};
+use crate::catalog::validation::SchemaLimits;
+use crate::execution::{RunRow, authority_snapshot, value_hash};
 use crate::storage::catalog::{
     AppendRequest, CatalogRepository, CatalogStoreError, ToolDefinition,
 };
+use crate::storage::executions::{ExecutionStoreError, RUN_COLUMNS, decode_run};
 use crate::storage::toolkits::{
     ToolkitStoreError, transition_toolkit as toolkit_transition, write_toolkit as toolkit_write,
 };
-use crate::toolkits::resolver::SelectionResolver;
+use crate::toolkits::resolver::{SelectionResolver, narrow_limits};
+use crate::worker::creds::{CredentialError, Minter};
 
 /// A refused or impossible builder storage operation, in the reference's exception shapes.
 #[derive(Debug, Error)]
@@ -59,9 +73,13 @@ pub enum BuilderStoreError {
     /// `"<resource> quota exceeded"`.
     #[error("{0} quota exceeded")]
     Quota(&'static str),
-    /// The reference's `BuilderForbiddenError` (`MB004`): the platform tenant never authors.
+    /// The reference's `BuilderForbiddenError` (`MB004`): the platform tenant never authors, and
+    /// the reference's `PermissionError`/`ExecutionDeniedError` for a refused execution.
     #[error("{0}")]
     Forbidden(String),
+    /// The reference's `BuilderUnavailableError` (`503`): this deployment cannot run drafts.
+    #[error("{0}")]
+    Unavailable(&'static str),
     /// The reference's `ValueError` for a request-level violation (`23514`/`23503`).
     #[error("{0}")]
     Invalid(String),
@@ -98,6 +116,20 @@ impl From<ToolkitStoreError> for BuilderStoreError {
                 }
                 other => Self::Database(other),
             },
+        }
+    }
+}
+
+impl From<ExecutionStoreError> for BuilderStoreError {
+    fn from(error: ExecutionStoreError) -> Self {
+        match error {
+            // A draft read never queues, so these two only arrive from a shared decoder that a
+            // caller misused; the public HTTP shape is the reference's 403 in either case.
+            ExecutionStoreError::QueueFull => Self::Forbidden("execution queue is full".to_owned()),
+            ExecutionStoreError::Denied => Self::Forbidden("execution denied".to_owned()),
+            ExecutionStoreError::Conflict(message) => Self::Conflict(message.to_owned()),
+            ExecutionStoreError::NotFound => Self::NotFound("run not found".to_owned()),
+            ExecutionStoreError::Store(error) => error.into(),
         }
     }
 }
@@ -365,6 +397,187 @@ impl BuilderKind {
             Self::Service => "service",
             Self::Operation => "operation",
         }
+    }
+}
+
+/// The execution and builder bounds one draft admission runs under: exactly the subset of the
+/// reference `Settings` that `ExecutionService.submit_draft` and
+/// `ExecutionRepository.accept_draft` read, plus the gateway application key they both use.
+/// The phase-5B service builds it from `ExecutionSettings`, `WorkerSettings` and the builder's
+/// own settings; keeping it explicit is what lets this storage call be tested without a
+/// deployment.
+#[derive(Debug, Clone)]
+pub struct DraftRunSettings {
+    /// `MCP_EXECUTION_ENABLED`: without it every draft admission is `Unavailable`.
+    pub execution_enabled: bool,
+    /// The reserved platform tenant that owns the first-party sources of licence references.
+    pub platform_tenant_id: AuthorityId,
+    /// `MCP_LICENSE_APP_KEY`, the gateway credential's application key; `"mcp"` when unset.
+    pub license_app_key: Option<String>,
+    /// `MCP_APPROVED_RUNNER_IMAGES`: the runner digests a `kata_python` draft may name.
+    pub approved_runner_images: Vec<String>,
+    /// `MCP_SYNC_WAIT_SECONDS`: how long the call polls the run before returning it queued.
+    pub sync_wait: Duration,
+    /// `MCP_QUEUE_GLOBAL_MAX`: runs queued across all tenants.
+    pub queue_global_max: u64,
+    /// `MCP_QUEUE_PER_TENANT_MAX`: runs queued for one tenant.
+    pub queue_per_tenant_max: u64,
+    /// `MCP_RUN_QUEUE_TIMEOUT_SECONDS`: the longest a run may wait to be claimed.
+    pub run_queue_timeout: Duration,
+    /// `MCP_RUN_MAX_SECONDS`: the wall-clock ceiling a tool's own limit is narrowed to.
+    pub run_max: Duration,
+    /// `MCP_MAX_API_CALLS_PER_RUN`: the call ceiling a tool's own limit is narrowed to.
+    pub max_api_calls_per_run: u32,
+    /// `MCP_BUILDER_TEST_RUNS_PER_HOUR`: draft runs one tenant may admit per hour.
+    pub test_runs_per_hour: u64,
+}
+
+/// Why a draft run could not resolve a backend licence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DraftLicenceError {
+    /// The reference's `MinterUnavailableError`: the authority cannot answer. The reference's
+    /// builder mount still renders it as a denial, never a retryable 5xx.
+    #[error("licence authority unavailable")]
+    Unavailable,
+    /// The reference's `ExecutionDeniedError` from the minter: no licence for this tenant/app.
+    #[error("licence denied")]
+    Denied,
+}
+
+/// The backend-licence lookup a draft run needs for licence-kind platform services: the
+/// reference's `Minter.licence_id(tenant, app, None)`.
+///
+/// The licence authority is an external boundary, so production passes the worker's [`Minter`]
+/// and tests may stand in a deterministic lookup.
+pub trait DraftLicenceLookup: Send + Sync {
+    /// The tenant's licence identity for `app`.
+    fn licence_id<'a>(
+        &'a self,
+        tenant: &'a AuthorityId,
+        app: &'a str,
+    ) -> BoxFuture<'a, Result<AuthorityId, DraftLicenceError>>;
+}
+
+impl DraftLicenceLookup for Minter {
+    fn licence_id<'a>(
+        &'a self,
+        tenant: &'a AuthorityId,
+        app: &'a str,
+    ) -> BoxFuture<'a, Result<AuthorityId, DraftLicenceError>> {
+        Box::pin(async move {
+            let tenant = Rfc4122Uuid::parse(tenant.as_str()).ok_or(DraftLicenceError::Denied)?;
+            let minted = Minter::licence_id(self, &tenant, app, None)
+                .await
+                .map_err(|error| match error {
+                    CredentialError::Unavailable(_) => DraftLicenceError::Unavailable,
+                    CredentialError::Denied(_) => DraftLicenceError::Denied,
+                })?;
+            AuthorityId::new(minted.to_string()).map_err(|_| DraftLicenceError::Denied)
+        })
+    }
+}
+
+/// The reference's `DRAFT_STATUSES`: the tool lifecycle states a test run may execute.
+const DRAFT_STATUSES: [VersionStatus; 2] = [VersionStatus::Draft, VersionStatus::Published];
+
+/// The reference's admission lock, shared with bound acceptance: one advisory transaction lock
+/// serializes bounded admission across API replicas.
+const DRAFT_ADMISSION_LOCK: i64 = 72_441_001;
+
+/// The reference's per-run event bound (`mcp_run_events`, 256 rows).
+const DRAFT_EVENT_LIMIT: i64 = 256;
+
+/// The reference's `POLL_RETRIES`: consecutive failed reads tolerated while waiting.
+const DRAFT_POLL_RETRIES: u32 = 3;
+
+/// The gateway credential's service key in a credential profile.
+const GATEWAY_SERVICE: &str = "gateway";
+
+/// The reference's only accepted idempotency key shape (`[A-Za-z0-9_.:-]{1,128}`).
+fn idempotency_key_valid(key: &str) -> bool {
+    (1..=128).contains(&key.len())
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
+}
+
+/// How an admission returned: a replayed prior run or a freshly queued one.
+enum DraftAdmission {
+    /// The reference's idempotent replay: the same tenant, tool version and key with the same
+    /// input hash.
+    Replay(RunRow),
+    /// A newly queued run.
+    Accepted(RunRow),
+}
+
+/// One `mcp_run_api_calls` row as the draft view projects it.
+struct DraftCall {
+    sequence: i32,
+    operation_id: String,
+    operation_version: i32,
+    method: Option<String>,
+    path: Option<String>,
+    effect: String,
+    status: String,
+    http_status: Option<i32>,
+    duration_ms: Option<i32>,
+    reason: Option<String>,
+    error_excerpt: Option<String>,
+    started_at: DateTime<Utc>,
+    finished_at: Option<DateTime<Utc>>,
+}
+
+impl DraftCall {
+    /// The reference's row dict, with each instant in Python's `isoformat()` layout.
+    fn as_json(&self) -> Value {
+        json!({
+            "sequence": self.sequence,
+            "operation_id": self.operation_id,
+            "operation_version": self.operation_version,
+            "method": self.method,
+            "path": self.path,
+            "effect": self.effect,
+            "status": self.status,
+            "http_status": self.http_status,
+            "duration_ms": self.duration_ms,
+            "reason": self.reason,
+            "error_excerpt": self.error_excerpt,
+            "started_at": isoformat(self.started_at),
+            "finished_at": self.finished_at.map(isoformat),
+        })
+    }
+}
+
+/// The reference's `draft_view`: the public envelope plus the call trace, and the last non-empty
+/// redacted error excerpt of the trace.
+fn draft_view(row: &RunRow, trace: &[DraftCall]) -> Value {
+    let excerpt = trace.iter().rev().find_map(|call| {
+        call.error_excerpt
+            .as_deref()
+            .filter(|text| !text.is_empty())
+    });
+    let calls: Vec<Value> = trace.iter().map(DraftCall::as_json).collect();
+    json!({
+        "run_id": row.run_id.to_string(),
+        "status": row.status.as_str(),
+        "result": row.result,
+        "error": row.error,
+        "payload_expired": row.payload_expired_at.is_some(),
+        "mode": "draft",
+        "trace": calls,
+        "error_excerpt": excerpt,
+    })
+}
+
+/// Python's `datetime.isoformat()` for an aware UTC instant: microseconds only when non-zero,
+/// always the explicit `+00:00` offset.
+fn isoformat(instant: DateTime<Utc>) -> String {
+    let micros = instant.timestamp_subsec_micros();
+    let seconds = instant.format("%Y-%m-%dT%H:%M:%S");
+    if micros == 0 {
+        format!("{seconds}+00:00")
+    } else {
+        format!("{seconds}.{micros:06}+00:00")
     }
 }
 
@@ -1159,6 +1372,557 @@ impl BuilderCatalogRepository {
         };
         tx.commit().await?;
         Ok(result)
+    }
+
+    // ── draft test runs ───────────────────────────────────────────────────────────────────
+
+    /// The reference's `ExecutionService.submit_draft`: run the author's own draft or published
+    /// tool version without a binding, and return its draft view.
+    ///
+    /// The order is the reference's, whole: the execution switch, the idempotency key, the
+    /// catalog generation, the tool version (owned, runnable, not retired, an approved runner
+    /// image for `kata_python`), every dependency the tool pins (usable by THIS tenant now),
+    /// the write confirmation, the input schema, the ephemeral credential profile (the caller's
+    /// proven `license_id` as gateway plus, for licence-kind platform services, the minter's
+    /// licence for that service), the narrowed limits and the draft authority snapshot. Only
+    /// then is the run admitted: under the shared admission lock, with a last generation check,
+    /// the idempotency replay, the hourly test-run quota and the queue bounds — the reference's
+    /// `accept_draft`. The returned view carries the upstream call trace of the run.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_draft(
+        &self,
+        author_tenant: &AuthorityId,
+        license_id: &AuthorityId,
+        tool_id: &Uuid7,
+        version: PositiveVersion,
+        inputs: &Value,
+        confirm_writes: bool,
+        idempotency_key: Option<&str>,
+        settings: &DraftRunSettings,
+        minter: Option<&dyn DraftLicenceLookup>,
+    ) -> Result<Value, BuilderStoreError> {
+        if !settings.execution_enabled {
+            return Err(BuilderStoreError::Unavailable(
+                "test runs are not available: execution is disabled",
+            ));
+        }
+        if let Some(key) = idempotency_key
+            && !idempotency_key_valid(key)
+        {
+            return Err(BuilderStoreError::Invalid(
+                "invalid idempotency key".to_owned(),
+            ));
+        }
+        // Every read below belongs to one catalog state; acceptance re-locks the generation.
+        let before = self.catalog_generation().await?;
+        let descriptor = self
+            .catalog
+            .get_version(author_tenant, tool_id, version)
+            .await?;
+        let manifest = descriptor.manifest;
+        if !DRAFT_STATUSES.contains(&descriptor.status)
+            || self.retired(author_tenant, tool_id).await?
+        {
+            return Err(BuilderStoreError::Conflict(
+                "tool version is not runnable".to_owned(),
+            ));
+        }
+        if manifest.runtime == Runtime::KataPython
+            && !manifest.runner_image_digest.as_ref().is_some_and(|digest| {
+                settings
+                    .approved_runner_images
+                    .iter()
+                    .any(|approved| approved == digest.as_str())
+            })
+        {
+            return Err(BuilderStoreError::Conflict(
+                "tool runner image is not approved".to_owned(),
+            ));
+        }
+        let (services, writes) = self.draft_dependencies(author_tenant, &manifest).await?;
+        if (manifest.effect == Effect::Writes || writes) && !confirm_writes {
+            return Err(BuilderStoreError::Invalid(
+                "this tool writes; confirm_writes is required".to_owned(),
+            ));
+        }
+        let schema = Value::Object(manifest.input_schema.clone());
+        validate_instance(&schema, inputs, &SchemaLimits::default())
+            .map_err(|_| BuilderStoreError::Invalid("invalid input arguments".to_owned()))?;
+        let app_key =
+            AppKey::new(settings.license_app_key.as_deref().unwrap_or("mcp")).map_err(|_| {
+                BuilderStoreError::Invalid("invalid gateway application key".to_owned())
+            })?;
+        let profile = CredentialProfile {
+            schema_version: 1,
+            profile_id: crate::storage::bindings::fresh_identity(),
+            tenant_id: author_tenant.clone(),
+            name: Name::new("draft_run")
+                .map_err(|_| BuilderStoreError::Corrupt("draft profile name"))?,
+            gateway: CredentialReference {
+                service: Name::new(GATEWAY_SERVICE)
+                    .map_err(|_| BuilderStoreError::Corrupt("gateway service"))?,
+                alias: Name::new(GATEWAY_SERVICE)
+                    .map_err(|_| BuilderStoreError::Corrupt("gateway service"))?,
+                license_id: license_id.clone(),
+                app_key,
+                bundle: None,
+            },
+            services: self
+                .licence_references(author_tenant, &services, settings, minter)
+                .await?,
+        };
+        // The reference's ceiling: the deployment's bounds, then the manifest narrows them.
+        let ceiling = ToolLimits {
+            wall_seconds: u32::try_from(settings.run_max.as_secs())
+                .unwrap_or(u32::MAX)
+                .min(300),
+            queue_seconds: u32::try_from(settings.run_queue_timeout.as_secs())
+                .unwrap_or(u32::MAX)
+                .min(600),
+            api_calls: settings.max_api_calls_per_run,
+            ..ToolLimits::default()
+        };
+        let resolved = ResolvedTool {
+            effective: EffectiveTool {
+                tool: ToolReference {
+                    id: tool_id.clone(),
+                    version,
+                    tenant_id: author_tenant.clone(),
+                },
+                operation_constraints: Vec::new(),
+                limits: narrow_limits(manifest.limits, ceiling),
+                public_name: manifest.public_name.clone(),
+            },
+            context: BoundContext {
+                tenant_id: author_tenant.clone(),
+                project_id: None,
+                workspace_id: None,
+                project_phase: None,
+                work_type: None,
+                card_stage: None,
+                responsibility: None,
+                test_command: None,
+                reviewed_commit: None,
+            },
+            manifest,
+        };
+        let digest = value_hash(inputs);
+        let authority =
+            authority_snapshot(&resolved).map_err(|_| BuilderStoreError::Corrupt("authority"))?;
+        let profile_snapshot =
+            serde_json::to_value(&profile).map_err(|_| BuilderStoreError::Corrupt("profile"))?;
+        let created_by = json!({
+            "subject": format!("tenant:{}", author_tenant.as_str()),
+            "license_id": license_id.as_str(),
+        });
+        let run = match self
+            .admit_draft(
+                author_tenant,
+                license_id,
+                &profile_snapshot,
+                &resolved,
+                &authority,
+                inputs,
+                &digest,
+                idempotency_key,
+                &created_by,
+                before,
+                settings,
+            )
+            .await?
+        {
+            DraftAdmission::Replay(run) | DraftAdmission::Accepted(run) => run,
+        };
+        self.draft_result(author_tenant, run, settings).await
+    }
+
+    /// The reference's `ExecutionService.draft_run`, the read behind
+    /// `GET /mcp/builder/runs/{run_id}`: the author's test run, with its call trace.
+    ///
+    /// Another tenant's run, an absent run and a bound run are all the same not-found refusal.
+    pub async fn draft_run(
+        &self,
+        author_tenant: &AuthorityId,
+        run_id: &Uuid7,
+    ) -> Result<Value, BuilderStoreError> {
+        let row = self.draft_row(author_tenant, run_id.as_str()).await?;
+        let trace = self.trace(author_tenant, run_id.as_str()).await?;
+        Ok(draft_view(&row, &trace))
+    }
+
+    /// The reference's `CatalogRepository.generation`: the catalog's monotonic generation.
+    async fn catalog_generation(&self) -> Result<i64, BuilderStoreError> {
+        let generation: Option<i64> =
+            sqlx::query_scalar("SELECT generation FROM public.mcp_catalog_state WHERE singleton")
+                .fetch_optional(&self.pool)
+                .await?;
+        generation.ok_or(BuilderStoreError::Corrupt("catalog generation row"))
+    }
+
+    /// The reference's `_retired`: an absent identity counts as retired.
+    async fn retired(
+        &self,
+        tenant: &AuthorityId,
+        tool_id: &Uuid7,
+    ) -> Result<bool, BuilderStoreError> {
+        let retired: Option<bool> = sqlx::query_scalar(
+            "SELECT retired FROM public.mcp_tools WHERE tenant_id = $1::uuid AND tool_id = $2::uuid",
+        )
+        .bind(tenant.as_str())
+        .bind(tool_id.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(retired.unwrap_or(true))
+    }
+
+    /// The reference's `_draft_dependencies`: every operation and service the tool names must be
+    /// usable by THIS tenant now — its own draft or published ones, or published platform
+    /// services it may use. Returns the services (first-occurrence order) and whether any
+    /// operation writes.
+    async fn draft_dependencies(
+        &self,
+        tenant: &AuthorityId,
+        manifest: &ToolManifest,
+    ) -> Result<(Vec<(Name, ServiceManifest)>, bool), BuilderStoreError> {
+        let mut services: Vec<(Name, ServiceManifest)> = Vec::new();
+        let mut writes = false;
+        for reference in &manifest.allowed_operations {
+            let (operation, operation_status) = self.catalog.operation(reference).await?;
+            let (service, service_status) = self.catalog.service(&operation.service).await?;
+            let owner = self.catalog.service_owner(&operation.service.id).await?;
+            let allowed = if owner != *tenant {
+                operation_status == VersionStatus::Published
+                    && service_status == VersionStatus::Published
+            } else {
+                DRAFT_STATUSES.contains(&operation_status)
+                    && DRAFT_STATUSES.contains(&service_status)
+            };
+            if !allowed
+                || !self
+                    .catalog
+                    .may_use_service(tenant, &operation.service)
+                    .await?
+            {
+                return Err(BuilderStoreError::Conflict(
+                    "tool depends on an unavailable operation or service".to_owned(),
+                ));
+            }
+            writes = writes || operation.effect == Effect::Writes;
+            // The reference's dict: a later version of the same service key replaces the value
+            // at its first position.
+            let position = services
+                .iter()
+                .position(|(key, _)| *key == service.service_key);
+            match position {
+                Some(index) => services[index].1 = service,
+                None => services.push((service.service_key.clone(), service)),
+            }
+        }
+        Ok((services, writes))
+    }
+
+    /// The reference's `_licence_references`: minted licence references for platform services
+    /// whose platform source is licence kind. A missing minter or application key, and any
+    /// minter refusal, is the reference's `ExecutionDeniedError`.
+    async fn licence_references(
+        &self,
+        tenant: &AuthorityId,
+        services: &[(Name, ServiceManifest)],
+        settings: &DraftRunSettings,
+        minter: Option<&dyn DraftLicenceLookup>,
+    ) -> Result<Vec<CredentialReference>, BuilderStoreError> {
+        let mut references = Vec::new();
+        for (service_key, service) in services {
+            if service.auth_adapter == AuthAdapter::Source {
+                continue;
+            }
+            // A stored token has no tenant licence to verify.
+            let kind: Option<String> = sqlx::query_scalar(
+                "SELECT auth->>'kind' FROM public.mcp_sources \
+                 WHERE owner_tenant_id = $1::uuid AND source_key = $2",
+            )
+            .bind(settings.platform_tenant_id.as_str())
+            .bind(service.destination_alias.as_str())
+            .fetch_optional(&self.pool)
+            .await?;
+            if kind.as_deref() != Some("licence") {
+                continue;
+            }
+            let Some(app_key) = service.license_app_key.clone() else {
+                return Err(BuilderStoreError::Forbidden("execution denied".to_owned()));
+            };
+            let Some(minter) = minter else {
+                return Err(BuilderStoreError::Forbidden("execution denied".to_owned()));
+            };
+            let licence = minter
+                .licence_id(tenant, app_key.as_str())
+                .await
+                .map_err(|_| BuilderStoreError::Forbidden("execution denied".to_owned()))?;
+            references.push(CredentialReference {
+                service: service_key.clone(),
+                alias: service_key.clone(),
+                license_id: licence,
+                app_key,
+                bundle: None,
+            });
+        }
+        Ok(references)
+    }
+
+    /// The reference's `accept_draft`: one bounded admission transaction under the shared
+    /// admission lock, serialized with bound acceptance so the queue bounds and the hourly
+    /// test-run limit are race-free.
+    #[allow(clippy::too_many_arguments)]
+    async fn admit_draft(
+        &self,
+        tenant: &AuthorityId,
+        license_id: &AuthorityId,
+        profile_snapshot: &Value,
+        resolved: &ResolvedTool,
+        authority: &Value,
+        inputs: &Value,
+        digest: &str,
+        idempotency_key: Option<&str>,
+        created_by: &Value,
+        generation: i64,
+        settings: &DraftRunSettings,
+    ) -> Result<DraftAdmission, BuilderStoreError> {
+        let reference = &resolved.effective.tool;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(DRAFT_ADMISSION_LOCK)
+            .execute(&mut *tx)
+            .await?;
+        let current: i64 =
+            sqlx::query_scalar("SELECT public.mcp_lock_execution_authority() AS generation")
+                .fetch_one(&mut *tx)
+                .await?;
+        if current != generation {
+            return Err(refusing(
+                tx,
+                BuilderStoreError::Conflict("authority changed during acceptance".to_owned()),
+            )
+            .await);
+        }
+        if let Some(key) = idempotency_key {
+            let statement = format!(
+                "SELECT {RUN_COLUMNS} FROM public.mcp_runs \
+                 WHERE mode = 'draft' AND tenant_id = $1::uuid AND tool_id = $2::uuid \
+                 AND tool_version = $3 AND idempotency_key = $4"
+            );
+            let prior = sqlx::query(AssertSqlSafe(statement))
+                .bind(tenant.as_str())
+                .bind(reference.id.as_str())
+                .bind(version_bits(reference.version))
+                .bind(key)
+                .fetch_optional(&mut *tx)
+                .await?;
+            if let Some(row) = prior {
+                let run = decode_run(&row).map_err(BuilderStoreError::from)?;
+                if run.input_hash != digest {
+                    return Err(refusing(
+                        tx,
+                        BuilderStoreError::Conflict("idempotency input conflict".to_owned()),
+                    )
+                    .await);
+                }
+                tx.commit().await?;
+                return Ok(DraftAdmission::Replay(run));
+            }
+        }
+        let recent: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM public.mcp_runs WHERE mode = 'draft' AND tenant_id = $1::uuid \
+             AND created_at > clock_timestamp() - interval '1 hour'",
+        )
+        .bind(tenant.as_str())
+        .fetch_one(&mut *tx)
+        .await?;
+        if recent >= i64::try_from(settings.test_runs_per_hour).unwrap_or(i64::MAX) {
+            return Err(refusing(tx, BuilderStoreError::Quota("test runs per hour")).await);
+        }
+        let (total, queued): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) AS total, count(*) FILTER (WHERE tenant_id = $1::uuid) AS tenant \
+             FROM public.mcp_runs WHERE status = 'queued'",
+        )
+        .bind(tenant.as_str())
+        .fetch_one(&mut *tx)
+        .await?;
+        if total >= i64::try_from(settings.queue_global_max).unwrap_or(i64::MAX)
+            || queued >= i64::try_from(settings.queue_per_tenant_max).unwrap_or(i64::MAX)
+        {
+            return Err(refusing(
+                tx,
+                BuilderStoreError::Forbidden("execution queue is full".to_owned()),
+            )
+            .await);
+        }
+        let statement = format!(
+            "INSERT INTO public.mcp_runs(run_id,mode,tenant_id,binding_id,binding_revision,\
+             gateway_license_id,credential_profile_id,profile_snapshot,owner_tenant_id,tool_id,\
+             tool_version,authority,inputs,input_hash,idempotency_key,created_by,queue_deadline) \
+             VALUES (uuidv7(),'draft',$1::uuid,NULL,NULL,$2::uuid,NULL,$3,$4::uuid,$5::uuid,$6,\
+             $7,$8,$9,$10,$11,\
+             clock_timestamp() + make_interval(secs => LEAST($12::double precision,$13::double precision))) \
+             RETURNING {RUN_COLUMNS}"
+        );
+        let row = sqlx::query(AssertSqlSafe(statement))
+            .bind(tenant.as_str())
+            .bind(license_id.as_str())
+            .bind(profile_snapshot.clone())
+            .bind(tenant.as_str())
+            .bind(reference.id.as_str())
+            .bind(version_bits(reference.version))
+            .bind(authority.clone())
+            .bind(inputs.clone())
+            .bind(digest)
+            .bind(idempotency_key)
+            .bind(created_by.clone())
+            .bind(f64::from(resolved.effective.limits.queue_seconds))
+            .bind(settings.run_queue_timeout.as_secs_f64())
+            .fetch_one(&mut *tx)
+            .await?;
+        let run = decode_run(&row).map_err(BuilderStoreError::from)?;
+        let run_id = run.run_id.to_string();
+        sqlx::query(
+            "INSERT INTO public.mcp_tenant_execution_locks(tenant_id) VALUES ($1::uuid) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant.as_str())
+        .execute(&mut *tx)
+        .await?;
+        // No untrusted logs or credentials are persisted. Each run has a bounded lifecycle.
+        sqlx::query(
+            "INSERT INTO public.mcp_run_events(tenant_id,run_id,kind) \
+             SELECT $1::uuid,$2::uuid,$3 \
+             WHERE (SELECT count(*) FROM public.mcp_run_events \
+                    WHERE tenant_id = $1::uuid AND run_id = $2::uuid) < $4",
+        )
+        .bind(tenant.as_str())
+        .bind(run_id.as_str())
+        .bind("queued")
+        .bind(DRAFT_EVENT_LIMIT)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(DraftAdmission::Accepted(run))
+    }
+
+    /// Wait for the accepted draft and project it with its trace.
+    async fn draft_result(
+        &self,
+        tenant: &AuthorityId,
+        run: RunRow,
+        settings: &DraftRunSettings,
+    ) -> Result<Value, BuilderStoreError> {
+        let run_id = run.run_id.to_string();
+        let row = self
+            .wait_draft(tenant, &run_id, run, settings.sync_wait)
+            .await;
+        let trace = self.trace(tenant, &run_id).await?;
+        Ok(draft_view(&row, &trace))
+    }
+
+    /// The reference's `_wait`: poll an ACCEPTED run until terminal or the sync wait ends. A
+    /// transient read failure never denies a run that is already durable.
+    async fn wait_draft(
+        &self,
+        tenant: &AuthorityId,
+        run_id: &str,
+        mut row: RunRow,
+        sync_wait: Duration,
+    ) -> RunRow {
+        let stop = Instant::now() + sync_wait;
+        let mut failures: u32 = 0;
+        while !row.status.is_terminal() && Instant::now() < stop {
+            tokio::time::sleep(Duration::from_millis(50) * 2_u32.pow(failures)).await;
+            match self.draft_row(tenant, run_id).await {
+                Ok(fresh) => {
+                    row = fresh;
+                    failures = 0;
+                }
+                Err(error) => {
+                    failures += 1;
+                    tracing::warn!(%error, "draft run poll failed; the run is already durable");
+                    if failures > DRAFT_POLL_RETRIES {
+                        break;
+                    }
+                }
+            }
+        }
+        row
+    }
+
+    /// The reference's `get_draft`: a draft run of this tenant; a bound run or another tenant's
+    /// run is not found.
+    async fn draft_row(
+        &self,
+        tenant: &AuthorityId,
+        run_id: &str,
+    ) -> Result<RunRow, BuilderStoreError> {
+        let statement = format!(
+            "SELECT {RUN_COLUMNS} FROM public.mcp_runs \
+             WHERE tenant_id = $1::uuid AND run_id = $2::uuid"
+        );
+        let row = sqlx::query(AssertSqlSafe(statement))
+            .bind(tenant.as_str())
+            .bind(run_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| BuilderStoreError::NotFound("run not found".to_owned()))?;
+        let run = decode_run(&row).map_err(BuilderStoreError::from)?;
+        if run.mode != "draft" {
+            return Err(BuilderStoreError::NotFound("run not found".to_owned()));
+        }
+        Ok(run)
+    }
+
+    /// The reference's `trace`: the run's upstream calls in order, exactly the columns the
+    /// reference selects.
+    async fn trace(
+        &self,
+        tenant: &AuthorityId,
+        run_id: &str,
+    ) -> Result<Vec<DraftCall>, BuilderStoreError> {
+        let rows = sqlx::query(
+            "SELECT sequence,operation_id::text AS operation_id,operation_version,method,path,\
+             effect,status,http_status,duration_ms,reason,error_excerpt,\
+             (extract(epoch FROM started_at) * 1000000)::bigint AS started_at_us, \
+             (extract(epoch FROM finished_at) * 1000000)::bigint AS finished_at_us \
+             FROM public.mcp_run_api_calls \
+             WHERE tenant_id = $1::uuid AND run_id = $2::uuid ORDER BY sequence",
+        )
+        .bind(tenant.as_str())
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let started_at: i64 = row.try_get("started_at_us")?;
+                let finished_at: Option<i64> = row.try_get("finished_at_us")?;
+                Ok(DraftCall {
+                    sequence: row.try_get("sequence")?,
+                    operation_id: row.try_get("operation_id")?,
+                    operation_version: row.try_get("operation_version")?,
+                    method: row.try_get("method")?,
+                    path: row.try_get("path")?,
+                    effect: row.try_get("effect")?,
+                    status: row.try_get("status")?,
+                    http_status: row.try_get("http_status")?,
+                    duration_ms: row.try_get("duration_ms")?,
+                    reason: row.try_get("reason")?,
+                    error_excerpt: row.try_get("error_excerpt")?,
+                    started_at: DateTime::from_timestamp_micros(started_at)
+                        .ok_or(BuilderStoreError::Corrupt("trace instant"))?,
+                    finished_at: match finished_at {
+                        Some(micros) => Some(
+                            DateTime::from_timestamp_micros(micros)
+                                .ok_or(BuilderStoreError::Corrupt("trace instant"))?,
+                        ),
+                        None => None,
+                    },
+                })
+            })
+            .collect()
     }
 
     // ── tool row helpers ──────────────────────────────────────────────────────────────────

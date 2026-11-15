@@ -81,8 +81,13 @@ pub struct AppState {
         (name = "runs", description = "Durable execution runs"),
         (name = "services", description = "Platform service contracts"),
         (name = "operations", description = "Platform operation contracts"),
-        (name = "sources", description = "Platform tool sources")
+        (name = "sources", description = "Platform tool sources"),
+        (name = "internal", description = "Service-to-service provisioning")
     ),
+    // `/mcp/internal/*` is not mounted through `api_router()`: it has its own credential
+    // surface and is merged outside the `/mcp` middleware (see [`app_with_internal`]). The
+    // path is still documented here, exactly as the reference's FastAPI app documents it.
+    paths(routes::internal::ensure_binding),
     components(schemas(routes::tools::ValidationError))
 )]
 struct ApiDoc;
@@ -165,22 +170,38 @@ pub fn app(
     // One parse of the authentication settings feeds both the middleware and the state's
     // gateway application key, so the two can never disagree.
     let auth = auth::Auth::from_config(auth_config)?;
-    Ok(app_with_auth(state, auth))
+    let internal = routes::internal::InternalRuntime::from_config(&state, &auth, auth_config)?;
+    Ok(app_with_internal(state, auth, internal))
 }
 
-/// The same application with an explicit [`auth::Auth`] (tests, and the binary through
-/// [`app`]).
+/// The application with the `/mcp/internal/*` runtime supplied explicitly (tests, and the
+/// binary through [`app`]).
 ///
-/// The auth layer is installed here, after every route is registered and before
-/// `with_state`, so it covers `/mcp` and every `/mcp/...` path — including paths no route
-/// knows yet, which the reference middleware also protects.
-pub fn app_with_auth(state: AppState, auth: auth::Auth) -> Router {
+/// The `/mcp` auth layer is installed after the `/mcp` routes are registered and **before**
+/// the internal router is merged, so it covers `/mcp` and every `/mcp/...` path except
+/// `/mcp/internal/*`: those carry a Keycloak service JWT, which that middleware would read as a
+/// tenant licence. The internal router authenticates in its own middleware instead
+/// (`routes::internal`), exactly as the reference's `/mcp/internal/` interceptor does.
+pub fn app_with_internal(
+    state: AppState,
+    auth: auth::Auth,
+    internal: routes::internal::InternalRuntime,
+) -> Router {
     let (router, _) = api_router().split_for_parts();
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
     // envelope, so it is not part of the utoipa OpenAPI document.
     router
         .route_service("/mcp", mcp::service(&state))
         .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
+        .merge(routes::internal::router(std::sync::Arc::new(internal)))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// The same application with an explicit [`auth::Auth`] (tests, and any caller that serves
+/// `/mcp` only). The internal runtime has no service-token verifier, so `/mcp/internal/*`
+/// answers `503 authority_unavailable`.
+pub fn app_with_auth(state: AppState, auth: auth::Auth) -> Router {
+    let internal = routes::internal::InternalRuntime::unavailable(&state, &auth);
+    app_with_internal(state, auth, internal)
 }
