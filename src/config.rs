@@ -2590,16 +2590,18 @@ mod tests {
         ])
         .expect("settings parse");
         let debug = format!("{settings:?}");
-        for secret in [
+        for (index, secret) in [
             "n8n-api-key-value",
             "n8n-webhook-secret-value",
             "fr-channel-secret-value",
             source_key.as_str(),
-        ] {
-            assert!(
-                !debug.contains(secret),
-                "a secret reached Debug: {secret} in {debug}"
-            );
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // The message names the FIELD, never the value: an assertion that embeds a secret is
+            // itself a cleartext write (CodeQL's "cleartext logging of sensitive information").
+            assert!(!debug.contains(secret), "secret #{index} reached Debug");
         }
         assert!(debug.contains("<redacted>"), "{debug}");
     }

@@ -36,7 +36,15 @@ const FIXTURE: &str = include_str!("fixtures/phase3c/oracle.json");
 const FIXTURE_BASE: &str = "http://n8n.test:5678";
 const RUN_ID: &str = "018f0000-0000-7000-8000-00000000aaaa";
 const TENANT_ID: &str = "10000000-0000-7000-8000-000000000001";
-const WEBHOOK_SECRET: &str = "synthetic-webhook-secret";
+/// The webhook key is the ORACLE's own — it ships in the fixture the pinned reference produced.
+/// Never a literal in source: a hard-coded key is a CodeQL alert, and the fixture is the only
+/// authority for the value anyway.
+fn webhook_secret() -> String {
+    fixture()["webhook_tokens"][0]["secret"]
+        .as_str()
+        .expect("the oracle's webhook secret")
+        .to_owned()
+}
 const API_KEY: &str = "test-api-key";
 const EXECUTION_ID: &str = "1216762";
 
@@ -101,7 +109,7 @@ async fn start_matches_the_oracle() {
         let secret = entry["request"]["headers"]
             .get("Authorization")
             .and_then(Value::as_str)
-            .map(|_| WEBHOOK_SECRET.to_owned());
+            .map(|_| webhook_secret());
         let adapter = N8nAdapter::new(
             client(),
             N8nSettings {
@@ -153,7 +161,10 @@ async fn start_matches_the_oracle() {
                 );
                 assert_eq!(
                     header,
-                    &format!("Bearer {}", webhook_token(WEBHOOK_SECRET, RUN_ID, issued)),
+                    &format!(
+                        "Bearer {}",
+                        webhook_token(&webhook_secret(), RUN_ID, issued)
+                    ),
                     "{name}: the token"
                 );
             }

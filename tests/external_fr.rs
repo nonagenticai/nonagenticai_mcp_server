@@ -28,7 +28,15 @@ use mcp_server_rs::external::{AnswerForwarder, ExternalAdapter, ExternalState, E
 use mcp_server_rs::storage::task_inputs::TaskInputRow;
 use mcp_server_rs::worker::row::WorkerRow;
 
-const SECRET: &str = "synthetic-channel-secret";
+/// The channel key is the ORACLE's own — it ships in the fixture the pinned reference produced.
+/// Never a literal in source: a hard-coded key is a CodeQL alert, and the fixture is the only
+/// authority for the value anyway.
+fn secret() -> String {
+    oracle()["signatures"][0]["secret"]
+        .as_str()
+        .expect("the oracle's channel secret")
+        .to_owned()
+}
 const TENANT: &str = "10000000-0000-7000-8000-000000000001";
 const OTHER_TENANT: &str = "10000000-0000-7000-8000-000000000002";
 const RUN: &str = "018f0000-0000-7000-8000-00000000aaaa";
@@ -248,7 +256,7 @@ impl TestServer {
     fn settings(&self) -> FrSettings {
         FrSettings {
             base_url: Some(self.base.clone()),
-            channel_secret: Some(SECRET.to_owned()),
+            channel_secret: Some(secret()),
         }
     }
 
@@ -264,7 +272,7 @@ impl TestServer {
 fn settings(base: &str) -> FrSettings {
     FrSettings {
         base_url: Some(base.to_owned()),
-        channel_secret: Some(SECRET.to_owned()),
+        channel_secret: Some(secret()),
     }
 }
 
@@ -308,32 +316,33 @@ fn signature_matches_the_oracle() {
 fn verify_is_total_over_malformed_input() {
     let body = b"{}";
     let now = 1_000_i64;
-    let good = sign(body, SECRET, now);
-    assert!(verify(body, &good, SECRET, now));
+    let good = sign(body, &secret(), now);
+    assert!(verify(body, &good, &secret(), now));
 
     let lowered: BTreeMap<String, String> = good
         .iter()
         .map(|(name, value)| (name.to_lowercase(), value.clone()))
         .collect();
     assert!(
-        verify(body, &lowered, SECRET, now),
+        verify(body, &lowered, &secret(), now),
         "header lookup is lowercase"
     );
 
-    assert!(!verify(body, &good, "another-secret", now));
-    assert!(!verify(b"{ }", &good, SECRET, now));
+    let other = format!("{}x", secret());
+    assert!(!verify(body, &good, &other, now));
+    assert!(!verify(b"{ }", &good, &secret(), now));
 
     let mut missing_signature = good.clone();
     missing_signature.remove(SIGNATURE_HEADER);
-    assert!(!verify(body, &missing_signature, SECRET, now));
+    assert!(!verify(body, &missing_signature, &secret(), now));
 
     let mut missing_timestamp = good.clone();
     missing_timestamp.remove(TIMESTAMP_HEADER);
-    assert!(!verify(body, &missing_timestamp, SECRET, now));
+    assert!(!verify(body, &missing_timestamp, &secret(), now));
 
     let mut wrong_signature = good.clone();
     wrong_signature.insert(SIGNATURE_HEADER.to_owned(), "sha256=00".to_owned());
-    assert!(!verify(body, &wrong_signature, SECRET, now));
+    assert!(!verify(body, &wrong_signature, &secret(), now));
 
     for timestamp in [
         String::new(),
@@ -347,7 +356,7 @@ fn verify_is_total_over_malformed_input() {
         let mut headers = good.clone();
         headers.insert(TIMESTAMP_HEADER.to_owned(), timestamp.clone());
         assert!(
-            !verify(body, &headers, SECRET, now),
+            !verify(body, &headers, &secret(), now),
             "timestamp {timestamp:?}"
         );
     }
@@ -519,10 +528,10 @@ async fn fr_start_matches_the_oracle_wire_and_outcome() {
             .parse()
             .expect("timestamp digits");
         assert!(
-            verify(&requests[0].body, headers, SECRET, timestamp),
+            verify(&requests[0].body, headers, &secret(), timestamp),
             "{name}"
         );
-        let signed = sign(&requests[0].body, SECRET, timestamp);
+        let signed = sign(&requests[0].body, &secret(), timestamp);
         assert_eq!(
             headers.get("x-channel-signature"),
             signed.get(SIGNATURE_HEADER),
@@ -916,12 +925,12 @@ async fn unconfigured_adapters_refuse() {
 fn settings_read_the_driver_configuration() {
     let driver = ExternalDriverSettings {
         fr_base_url: Some("http://fr.test/".to_owned()),
-        fr_channel_secret: Some(SECRET.to_owned()),
+        fr_channel_secret: Some(secret()),
         ..ExternalDriverSettings::default()
     };
     let settings = FrSettings::from(&driver);
     assert_eq!(settings.base_url.as_deref(), Some("http://fr.test/"));
-    assert_eq!(settings.channel_secret.as_deref(), Some(SECRET));
+    assert_eq!(settings.channel_secret.as_deref(), Some(secret().as_str()));
     assert!(FrAdapter::new(reqwest::Client::new(), settings).configured());
 }
 
@@ -998,9 +1007,9 @@ async fn the_envelope_escapes_non_ascii_like_the_reference() {
 fn the_fr_settings_redact_the_channel_secret() {
     let settings = FrSettings {
         base_url: Some("http://fr.test/".to_owned()),
-        channel_secret: Some(SECRET.to_owned()),
+        channel_secret: Some(secret()),
     };
     let debug = format!("{settings:?}");
-    assert!(!debug.contains(SECRET), "{debug}");
+    assert!(!debug.contains(&secret()), "{debug}");
     assert!(debug.contains("<redacted>"), "{debug}");
 }
