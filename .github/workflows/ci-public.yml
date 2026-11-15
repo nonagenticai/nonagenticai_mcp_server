@@ -190,6 +190,15 @@ jobs:
           docker run --rm "$IMG" --version
           out="$(docker run --rm "$IMG" --print-openapi)"
           [[ "$out" == *'"openapi"'* ]]
+          # Every non-default binary is proved to be IN the image and to start reading its own
+          # configuration. With no environment it must refuse for its own reason — a missing
+          # binary would print "no such file or directory" instead, which no assertion below
+          # accepts. (Same shape as the executor cutover's proof.)
+          for bin in mcp-worker mcp-external-driver; do
+            run="$(docker run --rm --entrypoint "/usr/local/bin/$bin" "$IMG" 2>&1 || true)"
+            [[ "$run" != *"no such file"* ]]
+            [[ "$run" == *"requires explicit execution enablement"* ]]
+          done
 
       - name: push to ghcr.io (main only)
         if: ${{ vars.PUBLISH_IMAGE == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}

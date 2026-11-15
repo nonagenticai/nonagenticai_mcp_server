@@ -15,7 +15,7 @@ Rust port of the Python implementation archived at
 |---|---|
 | **Runtime** | Rust 1.99.0 (pinned in `rust-toolchain.toml`), edition 2024 |
 | **Depends on** | PostgreSQL 18; a Kubernetes cluster with a Kata runtime class only when execution is enabled; a licence introspection endpoint only when licence authentication is configured |
-| **Runs on** | Two binaries from one image: `mcp-server-rs` (API) and `mcp-worker` (executor) |
+| **Runs on** | Three binaries from one image: `mcp-server-rs` (API), `mcp-worker` (Kata executor) and `mcp-external-driver` (n8n and fr runtimes) |
 
 ## Features
 
@@ -42,6 +42,13 @@ Rust port of the Python implementation archived at
   claims runs, starts one hardened Kata runner pod per run (non-root, read-only root
   filesystem, all capabilities dropped), brokers every upstream call through a scoped
   credential broker, and records the outcome.
+- **External runtimes.** Runs whose tool target is an n8n workflow, an fr project or one fixed fr
+  channel command are driven by the `mcp-external-driver` binary, which is their only writer: it
+  dispatches at most once (the dispatch event is committed before the upstream call), keeps each
+  run's lease alive while an upstream answer is in flight, polls the upstream each interval,
+  relays a human's approval answer back to fr, and records the outcome. Channels are signed — an
+  HMAC envelope to fr, a two-minute HS256 JWT to n8n — and both bounds (a 4 MiB poll body, a
+  64 KiB result) are the reference's.
 - **Health and OpenAPI.** `/health`, `/health/live`, `/health/ready` and `/api/health` report
   whether execution is enabled; `--print-openapi` emits the OpenAPI document with no
   configuration and no database.
@@ -58,6 +65,8 @@ logs, and `kube` for the worker's pod transport.
 |---|---|
 | `src/main.rs` | the API binary |
 | `src/bin/mcp-worker.rs` | the executor binary |
+| `src/bin/mcp-external-driver.rs` | the external-run driver binary |
+| `src/external/` | the driver loop, its storage half, and the n8n and fr adapters |
 | `src/lib.rs` | router, OpenAPI document, application state |
 | `src/mcp.rs` | the `/mcp` transport and handlers (`initialize`, `tools/list`, `tools/call`, tasks) |
 | `src/catalog/` | catalog domain: models, validation, publication, resolver |
@@ -87,9 +96,9 @@ Migrations run at startup. If `DATABASE_URL` goes through a transaction-pooling 
 `DATABASE_MIGRATE_URL` to a direct Postgres URL: sqlx's migrator holds a session-level advisory
 lock that pooled connections cannot guarantee.
 
-The image contains both binaries. Run the worker as a separate process (or Deployment) with the
-same `DATABASE_URL`; execution stays disabled until `EXECUTION_ENABLED=true` and the runner
-images are approved.
+The image contains all three binaries. Run the worker and the external driver as separate
+processes (or Deployments) with the same `DATABASE_URL`; execution stays disabled until
+`EXECUTION_ENABLED=true` and the runner images are approved.
 
 ## Usage
 

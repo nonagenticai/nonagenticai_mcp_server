@@ -667,6 +667,8 @@ pub struct ExternalDriverSettings {
     pub worker: WorkerSettings,
     /// The queue, timeout and retention bounds the driver shares with the API.
     pub execution: ExecutionSettings,
+    /// `EXECUTION_ENABLED`/`MCP_EXECUTION_ENABLED`: the driver refuses to start without it.
+    pub execution_enabled: bool,
     /// `MCP_EXTERNAL_RUN_MAX_SECONDS` (60 to 2592000, default 604800): the deadline for one
     /// external run. Deliberately not [`WorkerSettings::run_max`], whose ceiling is 300 s.
     pub run_max: Duration,
@@ -699,6 +701,7 @@ impl Default for ExternalDriverSettings {
         Self {
             worker: WorkerSettings::default(),
             execution: ExecutionSettings::default(),
+            execution_enabled: false,
             run_max: Duration::from_secs(604_800),
             active_max: 100,
             concurrency: 32,
@@ -722,11 +725,12 @@ impl ExternalDriverSettings {
     /// Testable core of [`ExternalDriverSettings::from_env`]. Empty values count as unset.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
-        let worker = WorkerSettings::from_lookup(&get)?;
-        let execution = ExecutionSettings::from_lookup(&get)?;
+        let worker = WorkerSettings::from_lookup(get)?;
+        let execution = ExecutionSettings::from_lookup(get)?;
         let settings = Self {
             worker,
             execution,
+            execution_enabled: execution_enabled_setting(&get)?,
             run_max: Duration::from_secs(u64_setting(
                 &get,
                 "MCP_EXTERNAL_RUN_MAX_SECONDS",
