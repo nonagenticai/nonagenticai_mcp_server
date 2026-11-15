@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod execution;
+pub mod external;
 pub mod mcp;
 pub mod routes;
 pub mod storage;
