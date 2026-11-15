@@ -16,6 +16,16 @@
 //! execution, an oversized envelope — is a tool RESULT carrying `isError: true`, never a
 //! JSON-RPC error, so the calling agent always reads the refusal as text.
 //!
+//! The reference's `builtin(principal)` branch: a principal with NO catalog binding is a
+//! builtin caller. It is served the builtin provider instead of the catalog — one page, never
+//! a cursor, and, when no provider is installed, every listing is the catalog refusal and
+//! every call the reference's `[permanent] tool not permitted for this caller`. A principal
+//! with a binding keeps the catalog path unchanged. A management principal is an AUTHORITY
+//! even without a binding, so it stays on the catalog path exactly as the reference's
+//! `current_authority()` does. A builtin `tools/call` also carries the request's
+//! `X-Strata-Token` — a licence caller's own strata-rag licence — on the builtin caller, where
+//! `faq_ask` forwards it to strata_rag; it is never rendered.
+//!
 //! One known divergence: `rmcp`'s typed [`CallToolRequestParams`] drops unknown top-level keys,
 //! so the reference's "unsupported call extension" refusal (`src/protocol.py:158-161`) cannot
 //! be reproduced here. A call carrying extra top-level keys behaves as a normal call.
@@ -63,6 +73,8 @@ use subtle::ConstantTimeEq as _;
 
 use crate::AppState;
 use crate::auth::Principal;
+use crate::builtin::BuiltinProvider;
+use crate::builtin::scope::{BuiltinCaller, DENIED_MESSAGE};
 use crate::catalog::ids::{AuthorityId, Uuid7};
 use crate::catalog::instance::{InstanceError, validate_instance};
 use crate::catalog::models::Effect;
@@ -100,9 +112,39 @@ pub struct McpServer {
     /// The durable inputs `tasks/update` answers.
     inputs: TaskInputRepository,
     settings: ExecutionSettings,
+    /// The in-process builtin tools. `None` is a deployment with no provider installed: a
+    /// non-binding caller then gets the reference's denial and listing refusal.
+    builtin: Option<BuiltinProvider>,
 }
 
 impl McpServer {
+    /// The reference's `builtin(principal)` listing: exactly the caller's scope, one page,
+    /// never catalog tools. A cursor — a builtin listing has no second page — and a deployment
+    /// with no provider installed are both the one `-32602` catalog refusal.
+    fn builtin_listing(
+        &self,
+        request: Option<&PaginatedRequestParams>,
+        principal: &Principal,
+    ) -> Result<ListToolsResult, McpError> {
+        let Some(provider) = self.builtin.as_ref() else {
+            return Err(refusal());
+        };
+        if request
+            .and_then(|params| params.cursor.as_deref())
+            .is_some()
+        {
+            return Err(refusal());
+        }
+        Ok(ListToolsResult {
+            tools: provider.list(&BuiltinCaller::from_principal(principal)),
+            next_cursor: None,
+            result_type: None,
+            ttl_ms: None,
+            cache_scope: None,
+            meta: None,
+        })
+    }
+
     /// The reference's `listing` closure, in full: resolve the caller's projection, prove the
     /// binding has not moved under the credential, fingerprint the projection, validate and
     /// mint the cursor, page, and project each tool into the MCP wire object.
@@ -119,6 +161,13 @@ impl McpServer {
             .and_then(|parts| parts.extensions.get::<Principal>())
             .cloned()
             .ok_or_else(refusal)?;
+
+        // The reference's `builtin(principal)` half: a principal with no catalog binding is a
+        // builtin caller and never sees the catalog. A management principal is an AUTHORITY
+        // even without a binding, so it descends the catalog path unchanged.
+        if principal.binding_id.is_none() && !principal.management {
+            return self.builtin_listing(request.as_ref(), &principal);
+        }
 
         // A live projection, re-derived for this request; management and bindingless callers
         // are refused by the resolver itself.
@@ -247,6 +296,23 @@ impl McpServer {
             .get::<Principal>()
             .cloned()
             .ok_or_else(refusal)?;
+
+        // The reference's `calling` closure: a principal with no catalog binding is served by
+        // the builtin provider. With no provider installed the denial is a tool-level error,
+        // never a JSON-RPC one. A binding principal keeps the catalog path unchanged below.
+        if principal.binding_id.is_none() && !principal.management {
+            let Some(provider) = self.builtin.as_ref() else {
+                return Ok(call_refusal(DENIED_MESSAGE));
+            };
+            let caller = BuiltinCaller::from_principal(&principal)
+                .with_strata_token(forwarded_strata_token(parts));
+            let arguments = request.arguments.clone().unwrap_or_default();
+            return Ok(CallToolResponse::Complete(
+                provider
+                    .call(&caller, request.name.as_ref(), arguments)
+                    .await,
+            ));
+        }
 
         // `params.arguments or {}`: absent arguments are an empty object.
         let arguments = request.arguments.clone().unwrap_or_default();
@@ -585,6 +651,39 @@ fn caller(context: &RequestContext<RoleServer>) -> Result<Principal, McpError> {
         .ok_or_else(|| McpError::internal_error("no caller authority on the request", None))
 }
 
+/// The care-bus tenant's own strata-rag licence, forwarded on `/mcp`.
+const STRATA_TOKEN_HEADER: &str = "x-strata-token";
+/// The reference `bearer()` bound on one authentication header (`maximum=4103`).
+const STRATA_TOKEN_MAX_BYTES: usize = 4103;
+
+/// The reference's `bearer(scope, b"x-strata-token")`: the caller's forwarded strata-rag
+/// licence, read from the request the way HTTP delivered it — the header name is
+/// case-insensitive, and a leading `Bearer ` is stripped. A duplicate, empty or over-long
+/// value is `None`, exactly as the reference drops the `bearer()` that raises; a licence
+/// caller left without one is refused by `faq_ask`, never served from the pinned tenant.
+fn forwarded_strata_token(parts: &Parts) -> Option<String> {
+    let mut values = parts.headers.get_all(STRATA_TOKEN_HEADER).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    // The reference's `bearer()` byte rule: 1..=4103 printable ASCII. `to_str` admits a tab,
+    // which the rule rejects, so the bytes are checked here too.
+    let raw = value.to_str().ok()?;
+    if raw.is_empty()
+        || raw.len() > STRATA_TOKEN_MAX_BYTES
+        || !raw.bytes().all(|byte| (32..=126).contains(&byte))
+    {
+        return None;
+    }
+    let text = raw.trim();
+    let text = match text.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("bearer ") => text[7..].trim(),
+        _ => text,
+    };
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 /// SEP-2663: every `tasks/*` call requires the client to have declared the extension. rmcp
 /// enforces this before dispatch (`handler/server.rs`); the same refusal is issued here so the
 /// rule stays visible where the ownership rules are.
@@ -726,6 +825,18 @@ fn project(tool: &ResolvedTool) -> Result<Tool, McpError> {
 /// The `/mcp` tower service. Mount it with `route_service`; the auth middleware must run
 /// first so the handler can read the resolved credential from the request extensions.
 pub fn service(state: &AppState) -> StreamableHttpService<McpServer, LocalSessionManager> {
+    service_with_builtin(state, Some(crate::builtin::create(state.pool.clone())))
+}
+
+/// The same service with an explicit builtin provider.
+///
+/// `None` is a deployment with no builtin provider installed: its listing and every call are
+/// the reference's refusals. The binary always uses [`service`]; tests use this seam to serve
+/// the empty registry or a registry of their own.
+pub fn service_with_builtin(
+    state: &AppState,
+    builtin: Option<BuiltinProvider>,
+) -> StreamableHttpService<McpServer, LocalSessionManager> {
     // The resolver is built exactly as the REST projection builds it, so both surfaces serve
     // one live catalog and cannot disagree. `tools/call` submits through the same resolver, so
     // the admission path's re-resolution can never disagree with the projection either.
@@ -744,6 +855,7 @@ pub fn service(state: &AppState) -> StreamableHttpService<McpServer, LocalSessio
         inputs: TaskInputRepository::new(state.pool.clone()),
         settings: state.execution.clone(),
         resolver,
+        builtin,
     };
     // Non-exhaustive: start from `Default` and set only the fields this service owns.
     let mut config = StreamableHttpServerConfig::default();
