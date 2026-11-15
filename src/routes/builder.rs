@@ -223,6 +223,9 @@ fn mount(runtime: Arc<BuilderRuntime>, authority: Mount) -> Router<AppState> {
             "/toolkits/{identity}/versions/{version}/publish",
             post(publish_toolkit),
         )
+        // These are scoped to this mount: `router()` nests each mount under its prefix, so an
+        // unknown path elsewhere in the application still reaches the app's own fallback (and
+        // the `/mcp` authentication layer, which runs after every merge).
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(unknown_path)
         .layer(middleware::from_fn_with_state(
@@ -1461,10 +1464,11 @@ fn mirror_item(item: &PathItem) -> PathItem {
         &mut item.patch,
         &mut item.trace,
         &mut item.query,
-    ] {
-        if let Some(operation) = operation {
-            mirror_operation(operation);
-        }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        mirror_operation(operation);
     }
     for operation in item.additional_operations.values_mut() {
         mirror_operation(operation);

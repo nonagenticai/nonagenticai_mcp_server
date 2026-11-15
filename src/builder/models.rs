@@ -724,8 +724,16 @@ mod tests {
             serde_json::from_value(json!({"op_key": "get_customer", "source_key": "crm"})).unwrap();
         assert_eq!(operation.script_key(), "crm.get_customer");
         let service_operation: ToolOperation =
-            serde_json::from_value(json!({"op_key": "projects.get", "service": "fr"})).unwrap();
-        assert_eq!(service_operation.script_key(), "fr.projects.get");
+            serde_json::from_value(json!({"op_key": "get_projects", "service": "fr"})).unwrap();
+        assert_eq!(service_operation.script_key(), "fr.get_projects");
+        // `op_key` is a plain catalog name in the reference (`models.py:81`), never dotted:
+        // the script key's separator comes from the origin, not from the key.
+        assert!(
+            serde_json::from_value::<ToolOperation>(
+                json!({"op_key": "projects.get", "service": "fr"})
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -295,7 +295,10 @@ impl BuilderSettings {
             allowed_ports: builder_ports(get("MCP_BUILDER_ALLOWED_PORTS"))?,
             deny_cidrs: builder_deny_cidrs(get("MCP_BUILDER_DENY_CIDRS"))?,
         };
-        settings.validate(None)?;
+        // Shape rules only: the licence cross-check needs `MCP_LICENSE_APP_KEY`, which this
+        // parser does not read (it lives with the authentication settings). `Config::from_lookup`
+        // and the composition root run that check where the key is known.
+        settings.validate_shapes()?;
         Ok(settings)
     }
 
@@ -303,9 +306,24 @@ impl BuilderSettings {
     /// builder has `MCP_LICENSE_APP_KEY` (`config.py:370-372`) — a builder without licence
     /// authentication could never admit a draft run.
     ///
-    /// `None` skips only the licence cross-check, so [`BuilderSettings::from_lookup`] can
-    /// validate everything it can see; the composition root passes the parsed application key.
+    /// [`validate_shapes`](Self::validate_shapes) is the same rule without the cross-check, for
+    /// parsing a settings block before the authentication settings are known.
+    ///
+    /// `None` skips only the licence cross-check (see [`validate_shapes`](Self::validate_shapes));
+    /// the composition root passes the parsed application key.
     pub fn validate(&self, license_app_key: Option<&str>) -> Result<(), ConfigError> {
+        self.validate_shapes()?;
+        if self.enabled && license_app_key.is_none() {
+            return Err(ConfigError::Invalid {
+                name: "MCP_LICENSE_APP_KEY",
+                reason: "the tool builder requires license authentication".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The shape rules alone: the port allow-list and the deny CIDRs.
+    pub fn validate_shapes(&self) -> Result<(), ConfigError> {
         if self.allowed_ports.is_empty()
             || self.allowed_ports.len() > 16
             || self.allowed_ports.contains(&0)
@@ -328,12 +346,6 @@ impl BuilderSettings {
                     reason: "invalid builder deny CIDR".to_owned(),
                 });
             }
-        }
-        if self.enabled && license_app_key.is_none() {
-            return Err(ConfigError::Invalid {
-                name: "MCP_LICENSE_APP_KEY",
-                reason: "the tool builder requires license authentication".to_owned(),
-            });
         }
         Ok(())
     }

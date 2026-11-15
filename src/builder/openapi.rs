@@ -461,7 +461,7 @@ impl<'a> Converter<'a> {
             return Err(Refused::new("schema nesting is too deep"));
         }
         match node {
-            Value::Bool(_) => return Ok(node.clone()),
+            Value::Bool(_) => Ok(node.clone()),
             Value::Object(map) => {
                 if let Some(bad) = map
                     .keys()
@@ -661,10 +661,7 @@ impl<'a> Converter<'a> {
             .defs
             .iter()
             .map(|(name, body)| {
-                let serialized = match serde_json::to_string(body) {
-                    Ok(text) => text,
-                    Err(_) => String::new(),
-                };
+                let serialized = serde_json::to_string(body).unwrap_or_default();
                 (name.clone(), def_references(&serialized))
             })
             .collect();

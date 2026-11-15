@@ -54,6 +54,7 @@ upstreams = []
 #   5B       builder, toolkit import and the internal mirrors — LANDED 2026-11-15
 #   phase 6  the fr channel
 [openapi_diff.ignore]
-paths = [
-  "/api/channels/fr/events",    # phase 6 (merged to main in #11; this lane predates it)
-]
+paths = []
+
+# The list is EMPTY: every one of the pinned source's 108 operations is served, and this
+# contract now guards against regression rather than tracking what is left to port.

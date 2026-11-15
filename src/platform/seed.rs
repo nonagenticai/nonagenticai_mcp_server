@@ -60,7 +60,7 @@ pub const SEED_LICENCE_ID: &str = "01900000-0000-7000-8000-00000000f002";
 /// The reserved platform tenant (`public.mcp_platform_tenant()`), the reference's default.
 pub const DEFAULT_PLATFORM_TENANT: &str = "01900000-0000-7000-8000-00000000f001";
 /// Arbitrary constant naming the seed's advisory lock ("MCPSEED").
-pub const LOCK_KEY: i64 = 0x4D4350_5345_4544;
+pub const LOCK_KEY: i64 = 0x004D_4350_5345_4544;
 /// How long a seed waits for another seed before refusing.
 pub const LOCK_WAIT: Duration = Duration::from_secs(300);
 

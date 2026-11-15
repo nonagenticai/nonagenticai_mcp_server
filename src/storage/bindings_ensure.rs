@@ -1089,6 +1089,9 @@ impl BindingEnsureService {
 
     /// The reference's `write_profile`: the tenant's ensure profile, reusing the ensure row's
     /// existing identity and writing only when the desired profile differs.
+    // The reference's own signature carries these eight values; a struct here would only
+    // rename the same call-site noise.
+    #[allow(clippy::too_many_arguments)]
     async fn write_profile(
         &self,
         conn: &mut PgConnection,

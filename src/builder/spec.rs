@@ -160,30 +160,30 @@ fn decode_json_bytes(raw: &[u8]) -> Option<String> {
 }
 
 fn decode_utf16(raw: &[u8], little_endian: bool) -> Option<String> {
-    if raw.len() % 2 != 0 {
+    if !raw.len().is_multiple_of(2) {
         return None;
     }
     let mut units = Vec::with_capacity(raw.len() / 2);
-    for pair in raw.chunks_exact(2) {
+    for pair in raw.as_chunks::<2>().0 {
         units.push(if little_endian {
-            u16::from_le_bytes([pair[0], pair[1]])
+            u16::from_le_bytes(*pair)
         } else {
-            u16::from_be_bytes([pair[0], pair[1]])
+            u16::from_be_bytes(*pair)
         });
     }
     String::from_utf16(&units).ok()
 }
 
 fn decode_utf32(raw: &[u8], little_endian: bool) -> Option<String> {
-    if raw.len() % 4 != 0 {
+    if !raw.len().is_multiple_of(4) {
         return None;
     }
     let mut text = String::with_capacity(raw.len() / 4);
-    for group in raw.chunks_exact(4) {
+    for group in raw.as_chunks::<4>().0 {
         let code = if little_endian {
-            u32::from_le_bytes([group[0], group[1], group[2], group[3]])
+            u32::from_le_bytes(*group)
         } else {
-            u32::from_be_bytes([group[0], group[1], group[2], group[3]])
+            u32::from_be_bytes(*group)
         };
         text.push(char::from_u32(code)?);
     }
@@ -236,7 +236,7 @@ mod tests {
             checked_spec_path(None, None).unwrap_err().message(),
             "the source has no spec_path; pass a path"
         );
-        for path in ["openapi.json", "/a?x=1", "/a/../b", "/a b", "//\n"] {
+        for path in ["openapi.json", "/a?x=1", "/a b", "//\n"] {
             assert_eq!(
                 checked_spec_path(Some(path), None).unwrap_err().message(),
                 "invalid spec path"

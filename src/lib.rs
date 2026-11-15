@@ -84,7 +84,8 @@ pub struct AppState {
         (name = "operations", description = "Platform operation contracts"),
         (name = "sources", description = "Platform tool sources"),
         (name = "internal", description = "Service-to-service provisioning"),
-        (name = "builder", description = "Tenant tool builder")
+        (name = "builder", description = "Tenant tool builder"),
+        (name = "channel", description = "fr inbound channel events")
     ),
     // `/mcp/internal/*` and the tenant builder are not mounted through `api_router()`: they
     // have their own credential surfaces and are merged outside the `/mcp` middleware (see
@@ -183,6 +184,10 @@ fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::sources::disable_source))
         .routes(routes!(routes::sources::enable_source))
         .routes(routes!(routes::toolkit_import::import_toolkit))
+        // fr's inbound channel. It authenticates by HMAC signature only, so `/mcp`'s
+        // authentication middleware passes it through by path (`auth::protect` protects
+        // `/mcp` and `/mcp/...` and nothing else) — exactly where the reference mounts it.
+        .routes(routes!(routes::fr_channel::events))
 }
 
 /// The OpenAPI document of this service (what `--print-openapi` writes). Needs no env and no DB.
@@ -219,6 +224,9 @@ pub fn app(
 /// The application with the `/mcp/internal/*` runtime supplied explicitly (tests, and the
 /// binary through [`app`]).
 ///
+/// The application with the `/mcp/internal/*` runtime supplied explicitly (tests, and the
+/// binary through [`app`]).
+///
 /// The `/mcp` auth layer is installed after the `/mcp` routes are registered and **before**
 /// the internal and builder routers are merged, so it covers `/mcp` and every `/mcp/...` path
 /// except `/mcp/internal/*` and `/mcp/builder/*`: those carry their own credentials (a Keycloak
@@ -245,28 +253,71 @@ pub fn app_with_internal(
 /// `app_with_builder` takes the same `/mcp` and internal surfaces as [`app_with_internal`] and
 /// adds both builder mounts (`/mcp/builder/*` and `/mcp/internal/tenants/{tenant_id}/builder/*`)
 /// outside the `/mcp` authentication layer: each mount authenticates its own credential shape.
+/// The fr channel's HMAC key comes from `MCP_FR_CHANNEL_SECRET`; tests that need an explicit key
+/// use [`app_with_channel_secret`].
 pub fn app_with_builder(
     state: AppState,
     auth: auth::Auth,
     internal: routes::internal::InternalRuntime,
     builder: routes::builder::BuilderRuntime,
 ) -> Router {
+    assemble(
+        state,
+        auth,
+        internal,
+        builder,
+        routes::fr_channel::secret_from_env(),
+    )
+}
+
+/// The same application with an explicit fr channel HMAC key, the reference's disabled builder
+/// and no service-token verifier (tests).
+///
+/// The reference reads the key off `app.state.settings`; this crate's [`AppState`] carries no
+/// settings object, so it travels as a request extension inserted here, once, from
+/// `MCP_FR_CHANNEL_SECRET` (or from the caller, in tests). `POST /api/channels/fr/events` reads
+/// it and nothing else does; the route is outside `/mcp`, so `auth::protect` passes it through
+/// untouched and the signature is the only credential it accepts.
+pub fn app_with_channel_secret(
+    state: AppState,
+    auth: auth::Auth,
+    channel_secret: Option<String>,
+) -> Router {
+    let internal = routes::internal::InternalRuntime::unavailable(&state, &auth);
+    let builder = routes::builder::BuilderRuntime::disabled(&state, &auth);
+    assemble(state, auth, internal, builder, channel_secret)
+}
+
+/// Every surface, assembled once: the catalog routes plus `/mcp`, the internal provisioning
+/// router, both builder mounts, and the fr inbound channel's key extension.
+fn assemble(
+    state: AppState,
+    auth: auth::Auth,
+    internal: routes::internal::InternalRuntime,
+    builder: routes::builder::BuilderRuntime,
+    channel_secret: Option<String>,
+) -> Router {
     let (router, _) = api_router().split_for_parts();
     // `/mcp` is rmcp's tower service, not an axum handler: it has its own JSON-RPC
     // envelope, so it is not part of the utoipa OpenAPI document.
     router
         .route_service("/mcp", mcp::service(&state))
-        .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
         .merge(routes::internal::router(std::sync::Arc::new(internal)))
         .merge(routes::builder::router(builder))
+        .layer(axum::Extension(routes::fr_channel::ChannelSecret(
+            channel_secret,
+        )))
+        // After every merge: the middleware is path-scoped (`/mcp` and `/mcp/...`, minus the
+        // builder and internal mounts), so an unknown `/mcp/...` path is still authenticated
+        // before it falls through to the router's default 404 — the reference's ordering.
+        .layer(axum::middleware::from_fn_with_state(auth, auth::protect))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
 /// The same application with an explicit [`auth::Auth`] (tests, and any caller that serves
 /// `/mcp` only). The internal runtime has no service-token verifier, so `/mcp/internal/*`
-/// answers `503 authority_unavailable`.
+/// answers `503 authority_unavailable`, and the builder is the reference's disabled one.
 pub fn app_with_auth(state: AppState, auth: auth::Auth) -> Router {
-    let internal = routes::internal::InternalRuntime::unavailable(&state, &auth);
-    app_with_internal(state, auth, internal)
+    app_with_channel_secret(state, auth, routes::fr_channel::secret_from_env())
 }

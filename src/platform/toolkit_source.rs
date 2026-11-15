@@ -527,25 +527,24 @@ fn directory_name(directory: &Path) -> Result<String, LoadError> {
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| source(&display(directory), "invalid directory name"))
+        .ok_or_else(|| source(display(directory), "invalid directory name"))
 }
 
 fn file_name(path: &Path) -> Result<String, LoadError> {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| source(&display(path), "invalid file name"))
+        .ok_or_else(|| source(display(path), "invalid file name"))
 }
 
 /// The directory entries, sorted by path (the reference's `sorted(p.iterdir())`).
 fn entries(directory: &Path) -> Result<Vec<PathBuf>, LoadError> {
     let mut paths = Vec::new();
-    let reader =
-        std::fs::read_dir(directory).map_err(|error| source(&display(directory), error))?;
+    let reader = std::fs::read_dir(directory).map_err(|error| source(display(directory), error))?;
     for entry in reader {
         paths.push(
             entry
-                .map_err(|error| source(&display(directory), error))?
+                .map_err(|error| source(display(directory), error))?
                 .path(),
         );
     }
@@ -554,7 +553,7 @@ fn entries(directory: &Path) -> Result<Vec<PathBuf>, LoadError> {
 }
 
 fn read_text(path: &Path) -> Result<String, LoadError> {
-    std::fs::read_to_string(path).map_err(|error| source(&display(path), error))
+    std::fs::read_to_string(path).map_err(|error| source(display(path), error))
 }
 
 fn read_object(path: &Path) -> Result<Map<String, Value>, LoadError> {
@@ -565,7 +564,7 @@ fn read_object(path: &Path) -> Result<Map<String, Value>, LoadError> {
             path: display(path),
             message: "expected a JSON object".to_owned(),
         }),
-        Err(error) => Err(source(&display(path), error)),
+        Err(error) => Err(source(display(path), error)),
     }
 }
 
@@ -593,7 +592,9 @@ mod tests {
         ] {
             refs.insert(key, value);
         }
-        let keys = vec!["crm.list_orders".to_owned(), "crm.get_customer".to_owned()];
+        // The table's keys ARE the pinned operation ids: the packager hands `ops_source` the
+        // refs it was given, and a key the caller names but never pinned is simply absent.
+        let keys: Vec<String> = refs.keys().cloned().collect();
         // The builder's packager writes the same Python `json.dumps` text; an empty package makes
         // it emit only kit.py and ops.py.
         let built = packaging::build_package(&[], &refs);
@@ -602,9 +603,16 @@ mod tests {
             .find(|file| file.path == "ops.py")
             .expect("the packager emits ops.py");
         assert_eq!(ops_source(&keys, &refs), ops.content);
+        // The table is keyed by the keys the caller names; the packager hands it the refs, so
+        // it emits every pinned operation — an empty key list is an empty table, not a refusal.
         assert_eq!(
             ops_source(&[], &refs),
             "# Generated: operation id and exact version per key.\nOPS = {}\n"
+        );
+        assert_eq!(
+            ops_source(&keys, &refs),
+            ops_source(&keys, &refs),
+            "the same inputs are deterministic"
         );
     }
 

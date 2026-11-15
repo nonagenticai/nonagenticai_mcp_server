@@ -4,6 +4,7 @@
 pub mod available;
 pub mod bindings;
 pub mod builder;
+pub mod fr_channel;
 pub mod health;
 pub mod internal;
 pub mod operations;
