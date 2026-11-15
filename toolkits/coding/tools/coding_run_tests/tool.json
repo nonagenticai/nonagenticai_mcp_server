@@ -1,0 +1,78 @@
+{
+  "tool_id": "01a17240-f950-7078-94e9-e5c92d77b89d",
+  "public_name": "coding_run_tests",
+  "operation": "coding.run_tests",
+  "description": "Run the workspace's tests (optionally one path) and return pass/fail with the output tail. Precondition: the workspace runs. Executes code inside the workspace sandbox.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "language": {
+        "enum": [
+          "python",
+          "javascript",
+          "typescript",
+          "nodejs",
+          "go",
+          "rust",
+          "java",
+          "csharp",
+          "cpp"
+        ]
+      },
+      "test_path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "format": "relative-path"
+      },
+      "test_type": {
+        "enum": [
+          "unit",
+          "integration",
+          "coverage"
+        ]
+      },
+      "timeout": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 300
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128,
+        "format": "idempotency-key",
+        "description": "Caller-chosen key; repeating the call with the same key and arguments is safe because every step reads state before writing."
+      }
+    },
+    "required": [
+      "container_name",
+      "language"
+    ]
+  },
+  "effect": "writes",
+  "allowed_operations": [
+    "workspace_status",
+    "tests_execute",
+    "tests_execute_all",
+    "test_result"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 5,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "tool_id": "01a179ab-bcf4-77bb-a196-98cf3acea689",
+  "public_name": "coding_update_dependencies",
+  "operation": "coding.update_dependencies",
+  "description": "Apply in-range dependency updates to the workspace working tree: upgrades the named packages, or every outdated package (at most 50) when none are named, by re-locking within the constraints already in the manifest (for a uv project `uv lock --upgrade-package`). Precondition: the workspace runs. Side effects: modifies the lockfile in the working tree; it never commits, pushes or opens a PR; run coding_run_checks next and then coding_open_pr. When no packages are named and the gateway reports nothing outdated, every package pyproject.toml declares (dependencies, extras, dependency groups) is re-locked in range instead; the result says which selection was used. Updates beyond a manifest constraint (major bumps) are reported as unchanged, not applied.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "packages": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 50,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "format": "package-name"
+        },
+        "description": "Package names to upgrade; omit to upgrade every outdated package the gateway detects, or every package pyproject.toml declares when it detects none."
+      },
+      "dry_run": {
+        "type": "boolean",
+        "description": "Plan the upgrade without changing the working tree."
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128,
+        "format": "idempotency-key",
+        "description": "Caller-chosen key; repeating the call with the same key and arguments is safe because every step reads state before writing."
+      }
+    },
+    "required": [
+      "container_name",
+      "idempotency_key"
+    ]
+  },
+  "effect": "writes",
+  "allowed_operations": [
+    "workspace_status",
+    "deps_outdated",
+    "deps_upgrade",
+    "git_diff",
+    "read_file"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 7,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

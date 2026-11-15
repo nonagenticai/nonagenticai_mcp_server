@@ -1,0 +1,130 @@
+{
+  "operation_id": "01a1723c-38ad-77dc-a847-4870e916c7e7",
+  "method": "POST",
+  "path_template": "/api/repositories/import",
+  "query_fields": [],
+  "header_fields": [],
+  "mappings": [
+    {
+      "location": "body",
+      "target": "/repo_url",
+      "value": {
+        "source": "input",
+        "pointer": "/repo_url"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/branch",
+      "value": {
+        "source": "input",
+        "pointer": "/branch"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/container_name",
+      "value": {
+        "source": "input",
+        "pointer": "/container_name"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/exact_name",
+      "value": {
+        "source": "literal",
+        "value": true
+      }
+    },
+    {
+      "location": "body",
+      "target": "/provision_type",
+      "value": {
+        "source": "literal",
+        "value": "branch"
+      }
+    },
+    {
+      "location": "body",
+      "target": "/force_rebuild",
+      "value": {
+        "source": "literal",
+        "value": false
+      }
+    }
+  ],
+  "scope_rules": [],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "repo_url": {
+        "type": "string",
+        "maxLength": 512,
+        "format": "repo-url-https",
+        "minLength": 1
+      },
+      "branch": {
+        "type": "string",
+        "maxLength": 200,
+        "format": "git-branch",
+        "minLength": 1
+      },
+      "container_name": {
+        "type": "string",
+        "maxLength": 63,
+        "format": "container-name",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "repo_url",
+      "branch",
+      "container_name"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "container": {
+        "type": "object",
+        "properties": {
+          "container_name": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "container_name",
+          "status"
+        ]
+      }
+    },
+    "required": [
+      "container"
+    ]
+  },
+  "response_projection": [
+    ""
+  ],
+  "redact_fields": [
+    "/container/github_access_token"
+  ],
+  "effect": "writes",
+  "idempotency": "none",
+  "max_retries": 0,
+  "timeout_seconds": 180,
+  "expected_error_statuses": [
+    400,
+    404,
+    409,
+    422
+  ],
+  "pagination_limit": 1,
+  "max_response_bytes": 131072
+}

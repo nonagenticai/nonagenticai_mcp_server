@@ -1,0 +1,111 @@
+{
+  "tool_id": "01a17240-f950-7078-94e9-e5cb7e0404b7",
+  "public_name": "coding_open_pr",
+  "operation": "coding.open_pr",
+  "description": "Open a pull request from the workspace: branch, commit the changed files, grade the committed change with the quality gate, push the branch (to the platform's fork, or to the repository itself when the platform owns it, as for sandbox-org repos; the result's push check names the target), create the PR, then poll its CI checks within a bounded budget. Preconditions: the workspace runs and the quality gate passes on the committed change (the tool commits first, then grades the new HEAD; if the gate fails it returns precondition_failed with the gate details, the commit stays local on the branch and nothing is pushed; run coding_run_checks for details, fix with coding_write_code, then call coding_open_pr again). Side effects: creates a branch, a commit, a push and a PR. If CI is still running it returns pending with a resume_token; call again with it.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "branch": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "git-branch"
+      },
+      "commit_message": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "body": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 20000
+      },
+      "base_branch": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "git-branch"
+      },
+      "original_owner": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "original_repo": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "language": {
+        "enum": [
+          "python",
+          "go",
+          "javascript",
+          "typescript"
+        ],
+        "description": "Primary language; selects the compile check."
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128,
+        "format": "idempotency-key",
+        "description": "Caller-chosen key; repeating the call with the same key and arguments is safe because every step reads state before writing."
+      },
+      "resume_token": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 2048,
+        "format": "resume-token",
+        "description": "Opaque token from a pending result; pass it back unchanged with the same other arguments."
+      }
+    },
+    "required": [
+      "container_name",
+      "branch",
+      "commit_message",
+      "title",
+      "body",
+      "original_owner",
+      "original_repo",
+      "idempotency_key"
+    ]
+  },
+  "effect": "writes",
+  "allowed_operations": [
+    "workspace_status",
+    "git_diff",
+    "quality_gate",
+    "ensure_branch",
+    "git_status",
+    "commit",
+    "push",
+    "create_pr",
+    "pr_checks"
+  ],
+  "limits": {
+    "wall_seconds": 300,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 22,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

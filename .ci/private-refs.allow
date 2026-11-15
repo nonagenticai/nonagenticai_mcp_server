@@ -38,3 +38,8 @@ src/sources/models.rs:(\.internal|api\.internal|auth\.internal)
 # suffix rules the reference refuses, and none of them names this estate's infrastructure.
 src/builtin/web/scrape.rs:(100\.64\.0|\.internal|192\.0\.0\.(9|10))
 tests/builtin_web.rs:(100\.64\.0|\.svc\.cluster\.local|\.internal)
+
+# Phase 5B (2026-11-15). The internal Keycloak verifier's tests build their settings from a
+# placeholder issuer; `keycloak.internal` is a documented example host, not this estate's
+# Keycloak (which is `auth.nonagentic.ai` and appears nowhere in the tests).
+tests/auth_keycloak.rs:keycloak\.internal

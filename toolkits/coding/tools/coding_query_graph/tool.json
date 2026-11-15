@@ -1,0 +1,78 @@
+{
+  "tool_id": "01a17240-f94f-764d-bbfe-86cf84964565",
+  "public_name": "coding_query_graph",
+  "operation": "coding.query_graph",
+  "description": "Read the code graph: nodes, edges, architecture overlay or component dependencies. Preconditions: the workspace runs and the graph has nodes (else precondition_failed with coding_provision_repo as next). Read-only. node_type/name_pattern apply to nodes; edge_type to edges; at most one filter.",
+  "entrypoint": "tool:main",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "container_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "format": "container-name",
+        "description": "Workspace name (lowercase letters, digits, hyphens)."
+      },
+      "query": {
+        "enum": [
+          "nodes",
+          "edges",
+          "architecture",
+          "dependencies"
+        ]
+      },
+      "node_type": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "name_pattern": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "edge_type": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "page": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100000
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      }
+    },
+    "required": [
+      "container_name",
+      "query"
+    ]
+  },
+  "effect": "read_only",
+  "allowed_operations": [
+    "workspace_status",
+    "get_graph",
+    "list_nodes",
+    "list_nodes_by_type",
+    "list_nodes_by_name",
+    "list_edges",
+    "list_edges_by_type",
+    "graph_augmented",
+    "arch_dependencies"
+  ],
+  "limits": {
+    "wall_seconds": 120,
+    "queue_seconds": 180,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 5,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}

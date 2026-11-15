@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "service_id": "01a1723c-3894-739d-8a82-80a5456514eb",
+  "service_key": "coding",
+  "destination_alias": "coding",
+  "license_app_key": "coding",
+  "auth_adapter": "license_bearer",
+  "credential_profile_key": "coding",
+  "max_request_bytes": 1048576,
+  "max_response_bytes": 1048576
+}

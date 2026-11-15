@@ -64,7 +64,16 @@ pub fn is_management(path: &str) -> bool {
 }
 
 fn protected(path: &str) -> bool {
-    path == "/mcp" || path.starts_with("/mcp/")
+    if path != "/mcp" && !path.starts_with("/mcp/") {
+        return false;
+    }
+    // The tenant builder and the internal provisioning surface carry their own credentials (a
+    // tenant licence, a Keycloak service JWT, or both) and authenticate in their own
+    // middleware; the reference's ASGI app exempts exactly these prefixes too.
+    !(path == "/mcp/builder"
+        || path.starts_with("/mcp/builder/")
+        || path == "/mcp/internal"
+        || path.starts_with("/mcp/internal/"))
 }
 
 /// The middleware body. Mount with

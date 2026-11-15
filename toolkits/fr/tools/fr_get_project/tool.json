@@ -1,0 +1,65 @@
+{
+  "tool_id": "01a1ad37-1b3d-72d1-82ff-a2890d2825ca",
+  "public_name": "fr_get_project",
+  "operation": "fr.get_project",
+  "effect": "read_only",
+  "runtime": "fr_command",
+  "target": {
+    "kind": "fr_command",
+    "command": "projects.get"
+  },
+  "description": "Read one fr project in the calling tenant's fr workspace as the agent member: its status, phase and, once delivered, the delivery evidence and deliverables. Pure read: changes nothing in fr and is safe to call again with the same id. Completes immediately with the project as the result.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    }
+  },
+  "result_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "project_type": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "phase": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "delivered_at": {
+        "type": "string"
+      },
+      "delivery_evidence": {},
+      "deliverables": {}
+    }
+  },
+  "limits": {
+    "wall_seconds": 60,
+    "queue_seconds": 240,
+    "memory_mi": 256,
+    "cpu_millicores": 250,
+    "api_calls": 2,
+    "frame_bytes": 262144,
+    "output_bytes": 262144
+  }
+}
