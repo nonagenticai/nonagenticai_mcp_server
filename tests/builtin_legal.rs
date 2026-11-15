@@ -8,8 +8,9 @@
 //! (`tests/fixtures/legal/`), and the parser expectations were produced by the reference code
 //! itself.
 //!
-//! The PDF-only paths cannot be ported without a PDF parser (see `legal::pdf_text`): those
-//! tests assert the reference's permanent error and the request sequence up to the PDF.
+//! The PDF paths extract the document's text through `crate::pdf`: a real published act
+//! (`fixtures/legal_pdf/duw_act.pdf`) proves DUW, UOKIK and both ELI shapes end-to-end; the
+//! damaged-PDF cases assert the reference's permanent class and the request sequence.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -1438,12 +1439,18 @@ fn consolidated_html() -> &'static str {
 }
 
 fn tj_meta(text_html: bool) -> Value {
+    tj_meta_with_pdf(text_html, "D20260236L.pdf")
+}
+
+/// The same metadata with a chosen consolidated-PDF name: the ELI PDF text cache is keyed by
+/// path, so tests that would otherwise share one path take a distinct file name each.
+fn tj_meta_with_pdf(text_html: bool, pdf: &str) -> Value {
     json!({
         "textHTML": text_html,
         "legalStatusDate": "2026-02-19",
         "texts": [
             {"type": "O", "fileName": "D20260236.pdf"},
-            {"type": "T", "fileName": "D20260236L.pdf"},
+            {"type": "T", "fileName": pdf},
         ],
         "ELI": "DU/2026/236",
     })
@@ -1605,11 +1612,11 @@ async fn eli_act_text_pdf_only_path_extracts_the_consolidated_act() {
         "GET",
         "/eli/acts/DU/2026/236",
         StatusCode::OK,
-        tj_meta(false),
+        tj_meta_with_pdf(false, "DUWACT.pdf"),
     );
     stub.bytes(
         "GET",
-        "/eli/acts/DU/2026/236/text/T/D20260236L.pdf",
+        "/eli/acts/DU/2026/236/text/T/DUWACT.pdf",
         StatusCode::OK,
         include_bytes!("fixtures/legal_pdf/duw_act.pdf"),
         "application/pdf",
@@ -1642,11 +1649,11 @@ async fn eli_act_text_cuts_one_article_out_of_the_pdf() {
         "GET",
         "/eli/acts/DU/2026/236",
         StatusCode::OK,
-        tj_meta(false),
+        tj_meta_with_pdf(false, "LAYOUT.pdf"),
     );
     stub.bytes(
         "GET",
-        "/eli/acts/DU/2026/236/text/T/D20260236L.pdf",
+        "/eli/acts/DU/2026/236/text/T/LAYOUT.pdf",
         StatusCode::OK,
         include_bytes!("fixtures/legal_pdf/layout.pdf"),
         "application/pdf",
@@ -1660,6 +1667,48 @@ async fn eli_act_text_cuts_one_article_out_of_the_pdf() {
     .expect("the article");
     assert_eq!(out["source_format"], "pdf");
     assert_eq!(out["text"], "Art. 61^1.");
+}
+
+#[tokio::test]
+async fn eli_act_text_caches_the_parsed_pdf_by_path() {
+    let (base, stub, _locations) = local_server().await;
+    // Each stub answers once: the two metadata reads are queued twice, the PDF only once —
+    // a cache miss on the second read would therefore fail instead of passing silently.
+    for _ in 0..2 {
+        stub.json(
+            "GET",
+            "/eli/acts/DU/1964/59/references",
+            StatusCode::OK,
+            eli_refs_answer(),
+        );
+        stub.json(
+            "GET",
+            "/eli/acts/DU/2026/236",
+            StatusCode::OK,
+            tj_meta_with_pdf(false, "CACHED.pdf"),
+        );
+    }
+    stub.bytes(
+        "GET",
+        "/eli/acts/DU/2026/236/text/T/CACHED.pdf",
+        StatusCode::OK,
+        include_bytes!("fixtures/legal_pdf/duw_act.pdf"),
+        "application/pdf",
+    );
+    let clients = clients_for(Service::Eli, &base);
+    let first = legal::eli::act_text(&clients, &args(json!({"eli": "DU/1964/59"})))
+        .await
+        .expect("first read");
+    let second = legal::eli::act_text(&clients, &args(json!({"eli": "DU/1964/59"})))
+        .await
+        .expect("second read");
+    assert_eq!(first["text"], second["text"]);
+    let fetches = stub
+        .requests()
+        .iter()
+        .filter(|request| request.path.ends_with("CACHED.pdf"))
+        .count();
+    assert_eq!(fetches, 1, "the parsed text is cached by path");
 }
 
 // ── SAOS ──────────────────────────────────────────────────────────────────────────────────

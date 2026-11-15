@@ -40,6 +40,14 @@ pub enum PdfError {
 
 const IDENTITY: [f64; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
+/// The deepest array nesting a content stream may carry before it is refused.
+///
+/// The reference's parser is Python and a crafted `[[[[…` stream raises `RecursionError`,
+/// which `scrape_util.pdf_text` turns into the permanent error. A Rust stack overflow *aborts*
+/// the process instead of raising, so the bound is explicit: no real content stream nests more
+/// than a handful of arrays, and a hostile one becomes [`PdfError::Unreadable`].
+const MAX_ARRAY_DEPTH: usize = 64;
+
 /// pypdf's `get_configuration().xform_maximum_invocations_per_extraction` stand-in: the
 /// recursion depth a Form XObject chain may reach before further content is skipped.
 const MAX_FORM_INVOCATIONS: usize = 100;
@@ -675,7 +683,7 @@ fn parse_operations(data: &[u8]) -> Result<Vec<Operation>, PdfError> {
             b'<' => operands.push(Operand::Bytes(lexer.hex_string()?)),
             b'[' => {
                 lexer.index += 1;
-                operands.push(Operand::Array(lexer.array()?));
+                operands.push(Operand::Array(lexer.array(0)?));
             }
             b']' | b'>' | b')' | b'{' | b'}' => lexer.index += 1,
             b'/' => operands.push(Operand::Name(lexer.name_value())),
@@ -859,7 +867,13 @@ impl Lexer<'_> {
         Err(PdfError::Unreadable)
     }
 
-    fn array(&mut self) -> Result<Vec<Operand>, PdfError> {
+    /// One array operand. The nesting depth is bounded as the reference's interpreter is by
+    /// Python's recursion limit: a crafted stream must become `Unreadable` (the permanent error)
+    /// and never exhaust this thread's stack, which would abort the process rather than raise.
+    fn array(&mut self, depth: usize) -> Result<Vec<Operand>, PdfError> {
+        if depth > MAX_ARRAY_DEPTH {
+            return Err(PdfError::Unreadable);
+        }
         let mut items = Vec::new();
         loop {
             self.whitespace();
@@ -877,7 +891,7 @@ impl Lexer<'_> {
                 b'<' => items.push(Operand::Bytes(self.hex_string()?)),
                 b'[' => {
                     self.index += 1;
-                    items.push(Operand::Array(self.array()?));
+                    items.push(Operand::Array(self.array(depth + 1)?));
                 }
                 b'/' => items.push(Operand::Name(self.name_value())),
                 b'0'..=b'9' | b'+' | b'-' | b'.' => items.push(self.number()),
@@ -946,4 +960,21 @@ fn delimiter(byte: u8) -> bool {
         byte,
         b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deeply_nested_arrays_are_refused_instead_of_exhausting_the_stack() {
+        // The reference's Python parser raises RecursionError here (a permanent tool error).
+        // Rust aborts on stack overflow, so the lexer must refuse at a fixed depth instead.
+        let data = vec![b'['; 10_000];
+        let mut lexer = Lexer {
+            data: &data,
+            index: 0,
+        };
+        assert!(matches!(lexer.array(0), Err(PdfError::Unreadable)));
+    }
 }
