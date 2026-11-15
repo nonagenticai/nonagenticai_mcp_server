@@ -4,6 +4,7 @@
 //! build the exact router the binary serves.
 
 pub mod auth;
+pub mod builder;
 pub mod catalog;
 pub mod config;
 pub mod db;
