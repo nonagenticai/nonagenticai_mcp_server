@@ -30,6 +30,7 @@ use regex::Regex;
 use super::Auth;
 use super::error::AuthError;
 use super::principal::Principal;
+use crate::builtin::scope::CAREBUS_LICENCE_APP;
 
 /// The request carries a resolved principal. Handlers take this extractor; the middleware
 /// inserts the value before the inner service runs.
@@ -111,6 +112,14 @@ async fn authorize(auth: &Auth, headers: &HeaderMap, path: &str) -> Result<Princ
     let management = is_management(path)
         || (path.starts_with("/mcp/runs/") && headers.contains_key("x-mcp-admin-key"));
 
+    // The reference's non-binding branch (`protocol.py:391`): a licence caller that presents no
+    // `X-MCP-Binding` is a BUILTIN caller, never a binding caller, and is resolved before the
+    // binding path. Its absence is what makes the builtin provider reachable at all; without it
+    // a tenant's care-bus licence was refused 401 and the 34 first-party tools served no caller.
+    if !management && !headers.contains_key("x-mcp-binding") {
+        return builtin_authority(auth, headers, path).await;
+    }
+
     let mut gateway = header(headers, "x-tenant-id", 4103)?;
     if !management && !gateway.as_deref().is_some_and(|v| v.starts_with("Bearer ")) {
         // Through the ingress the edge strips the client's X-Tenant-Id, so an off-cluster
@@ -168,6 +177,43 @@ async fn authorize(auth: &Auth, headers: &HeaderMap, path: &str) -> Result<Princ
         return Err(AuthError::Unauthorized);
     }
     Ok(principal)
+}
+
+/// A caller with a licence but no binding: the reference's `authenticate_caller`
+/// (`protocol.py:93-140`), fail closed.
+///
+/// `X-Tenant-Id: Bearer <licence>` — `Authorization` is never a licence candidate here — and
+/// only the care-bus application key authenticates this way, because only it has a builtin
+/// scope. The credential is valid on the protocol endpoint alone: every other path is 403, not
+/// "unknown route". An `mcp` licence with no binding is 401 "binding required", which is also
+/// the reference's answer while the tool builder is disabled.
+async fn builtin_authority(
+    auth: &Auth,
+    headers: &HeaderMap,
+    path: &str,
+) -> Result<Principal, AuthError> {
+    let gateway = header(headers, "x-tenant-id", 4103)?.ok_or(AuthError::Unauthorized)?;
+    let token = gateway
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
+        .ok_or(AuthError::Unauthorized)?;
+    let licence = auth.licences.introspect_any(token).await?;
+    if licence.app != CAREBUS_LICENCE_APP {
+        return Err(AuthError::Unauthorized);
+    }
+    // `PROTOCOL_PATHS = {"/mcp", "/mcp/"}`.
+    if path != "/mcp" && path != "/mcp/" {
+        return Err(AuthError::Forbidden);
+    }
+    Ok(Principal {
+        tenant_id: licence.identity.tenant_id,
+        license_id: licence.identity.license_id,
+        subject: licence.identity.subject,
+        binding_id: None,
+        binding_revision: None,
+        management: false,
+        platform: false,
+    })
 }
 
 /// One header value, printable ASCII, bounded; a leading `Bearer ` prefix is allowed to carry

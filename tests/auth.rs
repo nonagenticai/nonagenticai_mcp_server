@@ -185,6 +185,7 @@ fn real_app(auth: Auth) -> Router {
 /// management path and `/mcp/available-tools` a binding path, exactly as on the real router.
 fn probe(auth: Auth) -> Router {
     Router::new()
+        .route("/mcp", post(whoami))
         .route("/mcp/tools", post(whoami))
         .route("/mcp/available-tools", post(whoami))
         .layer(axum::middleware::from_fn_with_state(auth, protect))
@@ -692,4 +693,105 @@ async fn forbidden_maps_to_the_fixed_body() {
         serde_json::from_slice::<Value>(&bytes).expect("json"),
         json!({ "error": "forbidden" })
     );
+}
+
+// ── non-binding (builtin) callers ──────────────────────────────────────────────────────────
+//
+// The reference's `authenticate_caller` (`protocol.py:93-140`): a licence with no
+// `X-MCP-Binding` is a builtin caller, authenticated by a RAW introspection (`{"token"}` and no
+// `app`), requiring the care-bus application key, valid on `/mcp` alone. Without this branch the
+// 34 first-party tools were unreachable: every care-bus licence call was refused 401.
+
+fn care_bus_licence() -> Value {
+    let mut licence = active_licence("care-bus", TENANT, "tenant");
+    licence["subject_id"] = json!(format!("svc:{TENANT}:care-bus"));
+    licence
+}
+
+#[tokio::test]
+async fn a_care_bus_licence_without_a_binding_is_a_builtin_caller() {
+    let mut authority = authority(care_bus_licence()).await;
+    let app = probe(auth(&config(Some(&authority.url), None, None)));
+    let (status, _, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["binding_id"],
+        Value::Null,
+        "a builtin caller has no binding"
+    );
+    assert_eq!(body["binding_revision"], Value::Null);
+    assert_eq!(body["tenant_id"], TENANT);
+    assert_eq!(body["subject"], format!("svc:{TENANT}:care-bus"));
+    assert_eq!(body["management"], json!(false));
+    assert_eq!(body["platform"], json!(false));
+
+    // The RAW introspection: the token and no application key (`licenses.py:162-166`).
+    let request = authority
+        .requests
+        .try_recv()
+        .expect("the authority was called once");
+    assert_eq!(request, json!({ "token": LICENCE_TOKEN }));
+}
+
+#[tokio::test]
+async fn a_builtin_caller_may_not_use_another_path() {
+    let authority = authority(care_bus_licence()).await;
+    let app = probe(auth(&config(Some(&authority.url), None, None)));
+    let (status, headers, body) = call(
+        app,
+        Request::post("/mcp/available-tools")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    // `PROTOCOL_PATHS` is `/mcp` and `/mcp/` alone: authenticated, but this path is not its
+    // (`ForbiddenError`, 403 — never "unknown route").
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body, json!({ "error": "forbidden" }));
+    assert_eq!(
+        headers.get(CACHE_CONTROL).expect("Cache-Control"),
+        "no-store"
+    );
+}
+
+#[tokio::test]
+async fn an_mcp_licence_without_a_binding_is_refused() {
+    // "An mcp licence needs X-MCP-Binding; other apps have no builtin scope" — and the tool
+    // builder, the one other no-binding caller, is disabled in this deployment.
+    let authority = authority(active_licence("mcp", TENANT, "tenant")).await;
+    let app = probe(auth(&config(Some(&authority.url), None, None)));
+    let (status, headers, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("x-tenant-id", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_unauthorized(status, &headers, &body);
+}
+
+#[tokio::test]
+async fn a_builtin_caller_needs_x_tenant_id_not_authorization() {
+    // `Authorization` is never a licence candidate for a non-binding caller: only
+    // `X-Tenant-Id: Bearer` is (`protocol.py:104-106`).
+    let authority = authority(care_bus_licence()).await;
+    let app = probe(auth(&config(Some(&authority.url), None, None)));
+    let (status, headers, body) = call(
+        app,
+        Request::post("/mcp")
+            .header("authorization", format!("Bearer {LICENCE_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_unauthorized(status, &headers, &body);
 }

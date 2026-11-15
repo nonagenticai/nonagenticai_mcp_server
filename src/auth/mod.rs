@@ -31,7 +31,9 @@ pub use keycloak::{
     AuthorPrincipal, KeycloakError, KeycloakVerifier, ServiceClaims, ServicePrincipal,
     author_principal,
 };
-pub use licenses::{HttpLicenceAuthority, LicenceAuthority, UnconfiguredLicenceAuthority};
+pub use licenses::{
+    HttpLicenceAuthority, LicenceApp, LicenceAuthority, UnconfiguredLicenceAuthority,
+};
 pub use management::ManagementAuthorizer;
 pub use pg_bindings::PgBindingAuthority;
 pub use principal::{LicenseIdentity, Principal, SubjectKind};

@@ -25,8 +25,8 @@ use tower::ServiceExt;
 
 use mcp_server_rs::auth::pg_bindings::PgBindingAuthority;
 use mcp_server_rs::auth::{
-    Auth, AuthConfig, AuthError, Binding, BindingAuthority, BoxFuture, LicenceAuthority,
-    LicenseIdentity, Rfc4122Uuid, SubjectKind,
+    Auth, AuthConfig, AuthError, Binding, BindingAuthority, BoxFuture, LicenceApp,
+    LicenceAuthority, LicenseIdentity, Rfc4122Uuid, SubjectKind,
 };
 use mcp_server_rs::catalog::ids::{AuthorityId, PositiveVersion, Uuid7};
 use mcp_server_rs::catalog::lifecycle::VersionStatus;
@@ -335,6 +335,17 @@ impl Fixture {
 
 pub struct TestLicence;
 
+impl TestLicence {
+    fn identity() -> LicenseIdentity {
+        LicenseIdentity {
+            tenant_id: Rfc4122Uuid::parse(TENANT_A).expect("static uuid"),
+            license_id: Rfc4122Uuid::parse(LICENCE_ID).expect("static uuid"),
+            subject: "svc:test:mcp".into(),
+            subject_kind: Some(SubjectKind::Tenant),
+        }
+    }
+}
+
 impl LicenceAuthority for TestLicence {
     fn authenticate<'a>(
         &'a self,
@@ -344,11 +355,23 @@ impl LicenceAuthority for TestLicence {
             if token != LICENCE_TOKEN {
                 return Err(AuthError::Unauthorized);
             }
-            Ok(LicenseIdentity {
-                tenant_id: Rfc4122Uuid::parse(TENANT_A).expect("static uuid"),
-                license_id: Rfc4122Uuid::parse(LICENCE_ID).expect("static uuid"),
-                subject: "svc:test:mcp".into(),
-                subject_kind: Some(SubjectKind::Tenant),
+            Ok(Self::identity())
+        })
+    }
+
+    /// This licence's application key is `mcp`, so a caller with no binding is refused
+    /// ("an mcp licence needs X-MCP-Binding"); only care-bus has a builtin scope.
+    fn introspect_any<'a>(
+        &'a self,
+        token: &'a str,
+    ) -> BoxFuture<'a, Result<LicenceApp, AuthError>> {
+        Box::pin(async move {
+            if token != LICENCE_TOKEN {
+                return Err(AuthError::Unauthorized);
+            }
+            Ok(LicenceApp {
+                app: "mcp".into(),
+                identity: Self::identity(),
             })
         })
     }
