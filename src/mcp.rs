@@ -16,6 +16,14 @@
 //! execution, an oversized envelope — is a tool RESULT carrying `isError: true`, never a
 //! JSON-RPC error, so the calling agent always reads the refusal as text.
 //!
+//! The reference's `builtin(principal)` branch: a principal with NO catalog binding is a
+//! builtin caller. It is served the builtin provider instead of the catalog — one page, never
+//! a cursor, and, when no provider is installed, every listing is the catalog refusal and
+//! every call the reference's `[permanent] tool not permitted for this caller`. A principal
+//! with a binding keeps the catalog path unchanged. A management principal is an AUTHORITY
+//! even without a binding, so it stays on the catalog path exactly as the reference's
+//! `current_authority()` does.
+//!
 //! One known divergence: `rmcp`'s typed [`CallToolRequestParams`] drops unknown top-level keys,
 //! so the reference's "unsupported call extension" refusal (`src/protocol.py:158-161`) cannot
 //! be reproduced here. A call carrying extra top-level keys behaves as a normal call.
@@ -63,6 +71,8 @@ use subtle::ConstantTimeEq as _;
 
 use crate::AppState;
 use crate::auth::Principal;
+use crate::builtin::BuiltinProvider;
+use crate::builtin::scope::{BuiltinCaller, DENIED_MESSAGE};
 use crate::catalog::ids::{AuthorityId, Uuid7};
 use crate::catalog::instance::{InstanceError, validate_instance};
 use crate::catalog::models::Effect;
@@ -100,9 +110,39 @@ pub struct McpServer {
     /// The durable inputs `tasks/update` answers.
     inputs: TaskInputRepository,
     settings: ExecutionSettings,
+    /// The in-process builtin tools. `None` is a deployment with no provider installed: a
+    /// non-binding caller then gets the reference's denial and listing refusal.
+    builtin: Option<BuiltinProvider>,
 }
 
 impl McpServer {
+    /// The reference's `builtin(principal)` listing: exactly the caller's scope, one page,
+    /// never catalog tools. A cursor — a builtin listing has no second page — and a deployment
+    /// with no provider installed are both the one `-32602` catalog refusal.
+    fn builtin_listing(
+        &self,
+        request: Option<&PaginatedRequestParams>,
+        principal: &Principal,
+    ) -> Result<ListToolsResult, McpError> {
+        let Some(provider) = self.builtin.as_ref() else {
+            return Err(refusal());
+        };
+        if request
+            .and_then(|params| params.cursor.as_deref())
+            .is_some()
+        {
+            return Err(refusal());
+        }
+        Ok(ListToolsResult {
+            tools: provider.list(&BuiltinCaller::from_principal(principal)),
+            next_cursor: None,
+            result_type: None,
+            ttl_ms: None,
+            cache_scope: None,
+            meta: None,
+        })
+    }
+
     /// The reference's `listing` closure, in full: resolve the caller's projection, prove the
     /// binding has not moved under the credential, fingerprint the projection, validate and
     /// mint the cursor, page, and project each tool into the MCP wire object.
@@ -119,6 +159,13 @@ impl McpServer {
             .and_then(|parts| parts.extensions.get::<Principal>())
             .cloned()
             .ok_or_else(refusal)?;
+
+        // The reference's `builtin(principal)` half: a principal with no catalog binding is a
+        // builtin caller and never sees the catalog. A management principal is an AUTHORITY
+        // even without a binding, so it descends the catalog path unchanged.
+        if principal.binding_id.is_none() && !principal.management {
+            return self.builtin_listing(request.as_ref(), &principal);
+        }
 
         // A live projection, re-derived for this request; management and bindingless callers
         // are refused by the resolver itself.
@@ -247,6 +294,22 @@ impl McpServer {
             .get::<Principal>()
             .cloned()
             .ok_or_else(refusal)?;
+
+        // The reference's `calling` closure: a principal with no catalog binding is served by
+        // the builtin provider. With no provider installed the denial is a tool-level error,
+        // never a JSON-RPC one. A binding principal keeps the catalog path unchanged below.
+        if principal.binding_id.is_none() && !principal.management {
+            let Some(provider) = self.builtin.as_ref() else {
+                return Ok(call_refusal(DENIED_MESSAGE));
+            };
+            let caller = BuiltinCaller::from_principal(&principal);
+            let arguments = request.arguments.clone().unwrap_or_default();
+            return Ok(CallToolResponse::Complete(
+                provider
+                    .call(&caller, request.name.as_ref(), arguments)
+                    .await,
+            ));
+        }
 
         // `params.arguments or {}`: absent arguments are an empty object.
         let arguments = request.arguments.clone().unwrap_or_default();
@@ -726,6 +789,18 @@ fn project(tool: &ResolvedTool) -> Result<Tool, McpError> {
 /// The `/mcp` tower service. Mount it with `route_service`; the auth middleware must run
 /// first so the handler can read the resolved credential from the request extensions.
 pub fn service(state: &AppState) -> StreamableHttpService<McpServer, LocalSessionManager> {
+    service_with_builtin(state, Some(crate::builtin::create(state.pool.clone())))
+}
+
+/// The same service with an explicit builtin provider.
+///
+/// `None` is a deployment with no builtin provider installed: its listing and every call are
+/// the reference's refusals. The binary always uses [`service`]; tests use this seam to serve
+/// the empty registry or a registry of their own.
+pub fn service_with_builtin(
+    state: &AppState,
+    builtin: Option<BuiltinProvider>,
+) -> StreamableHttpService<McpServer, LocalSessionManager> {
     // The resolver is built exactly as the REST projection builds it, so both surfaces serve
     // one live catalog and cannot disagree. `tools/call` submits through the same resolver, so
     // the admission path's re-resolution can never disagree with the projection either.
@@ -744,6 +819,7 @@ pub fn service(state: &AppState) -> StreamableHttpService<McpServer, LocalSessio
         inputs: TaskInputRepository::new(state.pool.clone()),
         settings: state.execution.clone(),
         resolver,
+        builtin,
     };
     // Non-exhaustive: start from `Default` and set only the fields this service owns.
     let mut config = StreamableHttpServerConfig::default();
