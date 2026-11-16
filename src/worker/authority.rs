@@ -61,6 +61,18 @@ impl std::fmt::Display for AuthorityError {
 
 impl std::error::Error for AuthorityError {}
 
+impl AuthorityError {
+    /// A static class for logs: `Storage`/`Catalog` carry store text, and a database message can
+    /// echo a value, so only the variant is ever printed.
+    pub fn log_class(&self) -> &'static str {
+        match self {
+            Self::Denied => "denied",
+            Self::Storage(_) => "storage",
+            Self::Catalog(_) => "catalog",
+        }
+    }
+}
+
 impl From<WorkerStoreError> for AuthorityError {
     fn from(error: WorkerStoreError) -> Self {
         Self::Storage(error)
@@ -184,8 +196,14 @@ pub async fn live(
         .await
         .map_err(|error| {
             // The resolver's own error names the cause (a generation conflict, a forbidden
-            // binding, a missing manifest); the worker maps every variant to Denied.
-            tracing::warn!(stage = "authority.resolve", cause = ?error, "authority check denied");
+            // binding, a missing manifest). Only its class and static reason are logged: the
+            // Store/Service variants carry database text that can echo a value.
+            tracing::warn!(
+                stage = "authority.resolve",
+                class = error.log_class(),
+                reason = error.log_reason(),
+                "authority check denied"
+            );
             AuthorityError::Denied
         })?
         .into_iter()

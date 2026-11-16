@@ -82,6 +82,31 @@ pub enum CatalogResolverError {
     Service(ToolkitServiceError),
 }
 
+impl CatalogResolverError {
+    /// A static class for logs: `Store`/`Service` carry database text that can echo a value, so
+    /// only the variant is ever printed.
+    pub fn log_class(&self) -> &'static str {
+        match self {
+            Self::Forbidden(_) => "forbidden",
+            Self::Conflict(_) => "conflict",
+            Self::Invalid(_) => "invalid",
+            Self::Store(_) => "store",
+            Self::Service(_) => "service",
+        }
+    }
+
+    /// The static reason `Forbidden`/`Conflict`/`Invalid` carries — the words that name the
+    /// failing check. `None` for the wrapped variants, whose text is not logged.
+    pub fn log_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Forbidden(reason) | Self::Conflict(reason) | Self::Invalid(reason) => {
+                Some(reason)
+            }
+            Self::Store(_) | Self::Service(_) => None,
+        }
+    }
+}
+
 impl From<CatalogStoreError> for CatalogResolverError {
     fn from(error: CatalogStoreError) -> Self {
         Self::Store(error)
