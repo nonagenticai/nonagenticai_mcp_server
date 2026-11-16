@@ -61,6 +61,18 @@ impl std::fmt::Display for AuthorityError {
 
 impl std::error::Error for AuthorityError {}
 
+impl AuthorityError {
+    /// A static class for logs: `Storage`/`Catalog` carry store text, and a database message can
+    /// echo a value, so only the variant is ever printed.
+    pub fn log_class(&self) -> &'static str {
+        match self {
+            Self::Denied => "denied",
+            Self::Storage(_) => "storage",
+            Self::Catalog(_) => "catalog",
+        }
+    }
+}
+
 impl From<WorkerStoreError> for AuthorityError {
     fn from(error: WorkerStoreError) -> Self {
         Self::Storage(error)
@@ -85,12 +97,18 @@ impl From<sqlx::Error> for AuthorityError {
 /// output and its worker calls `model_validate_json`. A nested object would be unreadable by
 /// the Python worker, which is why the Rust API writes strings too.
 pub fn resolved_snapshot(run: &RunRow) -> Result<ResolvedTool, AuthorityError> {
-    let manifest: ToolManifest = serde_json::from_str(member_string(run, "manifest")?)
-        .map_err(|_| AuthorityError::Denied)?;
-    let effective: EffectiveTool = serde_json::from_str(member_string(run, "effective")?)
-        .map_err(|_| AuthorityError::Denied)?;
-    let context: BoundContext =
-        serde_json::from_str(member_string(run, "context")?).map_err(|_| AuthorityError::Denied)?;
+    let manifest: ToolManifest = serde_json::from_str(
+        member_string(run, "manifest").map_err(|_| denied_at("authority.member.manifest"))?,
+    )
+    .map_err(|_| denied_at("authority.member.parse"))?;
+    let effective: EffectiveTool = serde_json::from_str(
+        member_string(run, "effective").map_err(|_| denied_at("authority.member.effective"))?,
+    )
+    .map_err(|_| denied_at("authority.member.parse"))?;
+    let context: BoundContext = serde_json::from_str(
+        member_string(run, "context").map_err(|_| denied_at("authority.member.context"))?,
+    )
+    .map_err(|_| denied_at("authority.member.parse"))?;
     Ok(ResolvedTool {
         manifest,
         effective,
@@ -115,30 +133,53 @@ pub struct LiveAuthority {
 ///
 /// A draft run takes the draft path ([`live_draft`]); everything else re-checks the binding, the
 /// profile snapshot, the live catalog and the wall clock.
+/// A denial that names the failing stage in the log.
+///
+/// The caller only sees [`AuthorityError::Denied`]; this static label says **which** check
+/// refused. Never a value, a path or a credential.
+fn denied_at(stage: &'static str) -> AuthorityError {
+    tracing::warn!(stage, "authority check denied");
+    AuthorityError::Denied
+}
+
 pub async fn live(
     store: &WorkerStore,
     resolver: &CatalogResolver,
     row: &WorkerRow,
 ) -> Result<LiveAuthority, AuthorityError> {
     // The fence first: a stale worker learns nothing and writes nothing.
-    fence_check(store, row).await?;
+    fence_check(store, row).await.inspect_err(|error| {
+        tracing::warn!(
+            stage = "authority.fence",
+            class = error.log_class(),
+            "authority check denied"
+        )
+    })?;
 
     if row.run.mode == "draft" {
         return live_draft(store, row).await;
     }
 
-    let original = resolved_snapshot(&row.run)?;
-    let tenant =
-        AuthorityId::new(row.run.tenant_id.to_string()).map_err(|_| AuthorityError::Denied)?;
+    let original = resolved_snapshot(&row.run).inspect_err(|_error| {
+        tracing::warn!(stage = "authority.snapshot", "authority check denied")
+    })?;
+    let tenant = AuthorityId::new(row.run.tenant_id.to_string())
+        .map_err(|_| denied_at("authority.identity"))?;
     let binding_id = Uuid7::new(
         row.run
             .binding_id
             .as_ref()
-            .ok_or(AuthorityError::Denied)?
+            .ok_or_else(|| denied_at("authority.binding.missing"))?
             .to_string(),
     )
-    .map_err(|_| AuthorityError::Denied)?;
-    let binding = bindings::inspect(store.pool(), &tenant, &binding_id).await?;
+    .map_err(|_| denied_at("authority.binding.identity"))?;
+    let binding = bindings::inspect(store.pool(), &tenant, &binding_id)
+        .await
+        .inspect_err(|_error| {
+            // The binding read's error is a catalog-store error whose text can echo SQL detail;
+            // the stage is the safe fact.
+            tracing::warn!(stage = "authority.binding", "authority check denied")
+        })?;
     // Context identity and profile identity are both part of the authority a run was accepted
     // under; a change to either invalidates work already in flight.
     if serde_json::to_string(&binding.spec.context).ok().as_deref()
@@ -150,7 +191,7 @@ pub async fn live(
             .map(ToString::to_string)
             != Some(binding.spec.credential_profile_id.to_string())
     {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("authority.context"));
     }
     let principal = Principal {
         tenant_id: row.run.tenant_id,
@@ -165,14 +206,28 @@ pub async fn live(
     let current = resolver
         .resolve(&principal)
         .await
-        .map_err(|_| AuthorityError::Denied)?
+        .map_err(|error| {
+            // The resolver's own error names the cause (a generation conflict, a forbidden
+            // binding, a missing manifest). Only its class and static reason are logged: the
+            // Store/Service variants carry database text that can echo a value.
+            tracing::warn!(
+                stage = "authority.resolve",
+                class = error.log_class(),
+                reason = error.log_reason(),
+                "authority check denied"
+            );
+            AuthorityError::Denied
+        })?
         .into_iter()
         .find(|candidate| candidate.effective.tool == original.effective.tool)
-        .ok_or(AuthorityError::Denied)?;
+        .ok_or_else(|| denied_at("authority.tool.membership"))?;
     if serde_json::to_string(&current.manifest).ok().as_deref()
-        != Some(member_string(&row.run, "manifest")?)
+        != Some(
+            member_string(&row.run, "manifest")
+                .map_err(|_| denied_at("authority.member.manifest"))?,
+        )
     {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("authority.manifest"));
     }
     // The profile must be identical to the one the run was accepted with.
     let stored: Option<Value> = sqlx::query_scalar(
@@ -184,19 +239,20 @@ pub async fn live(
         row.run
             .credential_profile_id
             .as_ref()
-            .ok_or(AuthorityError::Denied)?
+            .ok_or_else(|| denied_at("authority.profile.identity"))?
             .to_string(),
     )
     .fetch_optional(store.pool())
     .await
-    .map_err(|_| AuthorityError::Denied)?;
+    .map_err(|_| denied_at("authority.profile"))?;
     if stored.as_ref() != Some(&row.run.profile_snapshot) {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("authority.profile.compare"));
     }
     let effective = intersect(&original, &current);
-    wall_clock(&row.run, effective.limits.wall_seconds)?;
+    wall_clock(&row.run, effective.limits.wall_seconds)
+        .inspect_err(|_error| tracing::warn!(stage = "authority.wall", "authority check denied"))?;
     let profile: CredentialProfile = serde_json::from_value(row.run.profile_snapshot.clone())
-        .map_err(|_| AuthorityError::Denied)?;
+        .map_err(|_| denied_at("authority.profile.parse"))?;
     Ok(LiveAuthority {
         resolved: original,
         effective,
@@ -211,37 +267,55 @@ pub async fn live_draft(
     store: &WorkerStore,
     row: &WorkerRow,
 ) -> Result<LiveAuthority, AuthorityError> {
-    fence_check(store, row).await?;
+    fence_check(store, row).await.inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.fence", "authority check denied")
+    })?;
 
     let run = &row.run;
     if run.owner_tenant_id != run.tenant_id {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("draft.owner"));
     }
-    let original = resolved_snapshot(run)?;
+    let original = resolved_snapshot(run).inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.snapshot", "authority check denied")
+    })?;
     let catalog = CatalogRepository::new(store.pool().clone());
-    let tenant = AuthorityId::new(run.tenant_id.to_string()).map_err(|_| AuthorityError::Denied)?;
+    let tenant =
+        AuthorityId::new(run.tenant_id.to_string()).map_err(|_| denied_at("draft.identity"))?;
     let descriptor = catalog
         .get_version(
             &tenant,
-            &Uuid7::new(run.tool_id.to_string()).map_err(|_| AuthorityError::Denied)?,
+            &Uuid7::new(run.tool_id.to_string()).map_err(|_| denied_at("draft.tool.identity"))?,
             PositiveVersion::new(
-                u64::try_from(run.tool_version).map_err(|_| AuthorityError::Denied)?,
+                u64::try_from(run.tool_version).map_err(|_| denied_at("draft.tool.version"))?,
             )
-            .map_err(|_| AuthorityError::Denied)?,
+            .map_err(|_| denied_at("draft.tool.version"))?,
         )
         .await
-        .map_err(|_| AuthorityError::Denied)?;
+        .map_err(|_| denied_at("draft.tool"))?;
+    // The short-circuit order is the reference's: the retired probe runs only when the status
+    // check passed, and the stage log rides that probe.
     if !DRAFT_STATUSES.contains(&descriptor.status)
-        || retired(store.pool(), run).await?
+        || retired(store.pool(), run).await.inspect_err(|_error| {
+            tracing::warn!(stage = "authority.draft.retired", "authority check denied")
+        })?
         || serde_json::to_string(&descriptor.manifest).ok().as_deref()
-            != Some(member_string(run, "manifest")?)
+            != Some(member_string(run, "manifest").map_err(|_| denied_at("draft.member.manifest"))?)
     {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("draft.manifest"));
     }
-    draft_dependencies(&catalog, &tenant, &descriptor).await?;
-    wall_clock(run, original.effective.limits.wall_seconds)?;
-    let profile: CredentialProfile =
-        serde_json::from_value(run.profile_snapshot.clone()).map_err(|_| AuthorityError::Denied)?;
+    draft_dependencies(&catalog, &tenant, &descriptor)
+        .await
+        .inspect_err(|_error| {
+            tracing::warn!(
+                stage = "authority.draft.dependencies",
+                "authority check denied"
+            )
+        })?;
+    wall_clock(run, original.effective.limits.wall_seconds).inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.wall", "authority check denied")
+    })?;
+    let profile: CredentialProfile = serde_json::from_value(run.profile_snapshot.clone())
+        .map_err(|_| denied_at("draft.profile"))?;
     let effective = original.effective.clone();
     Ok(LiveAuthority {
         resolved: original,
