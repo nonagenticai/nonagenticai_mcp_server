@@ -92,6 +92,13 @@ fn denied_at(stage: &'static str) -> BrokerError {
     BrokerError::Denied
 }
 
+/// Deny one response-side exchange check, naming it. The fixed `reason` class still travels to
+/// the terminal `exchange failed` line.
+fn response_denied(stage: &'static str, reason: Option<&'static str>) -> Failure {
+    tracing::warn!(stage, "broker check denied");
+    Failure::denied(reason)
+}
+
 /// The result of one brokered call.
 ///
 /// [`CallOutcome::Expected`] is the reference's `UpstreamStatusError`: an upstream answered a
@@ -796,7 +803,7 @@ impl Broker {
                                     data.extend_from_slice(&chunk);
                                     if data.len() as u64 > limit {
                                         reason = Some("too_large");
-                                        return Err(Failure::denied(reason));
+                                        return Err(response_denied("response.size", reason));
                                     }
                                 }
                                 Ok(None) => break,
@@ -811,24 +818,24 @@ impl Broker {
                             json!({})
                         } else {
                             let raw: Value = serde_json::from_slice(&data)
-                                .map_err(|_| Failure::denied(reason))?;
+                                .map_err(|_| response_denied("response.parse", reason))?;
                             policy::project(&operation, &raw)
-                                .map_err(|_| Failure::denied(reason))?
+                                .map_err(|_| response_denied("response.project", reason))?
                         };
                         // A downstream echo must not transport mounted auth material into a
                         // runner even if an operator declared a broad schema.
                         if leaks.contains(&canonical_json(&result)) {
-                            return Err(Failure::denied(reason));
+                            return Err(response_denied("response.leak", reason));
                         }
                         validate_instance(
                             &Value::Object(operation.output_schema.clone()),
                             &result,
                             &SchemaLimits::default(),
                         )
-                        .map_err(|_| Failure::denied(reason))?;
+                        .map_err(|_| response_denied("response.schema", reason))?;
                         if canonical_json(&result).len() > frame_limit {
                             reason = Some("too_large");
-                            return Err(Failure::denied(reason));
+                            return Err(response_denied("response.size", reason));
                         }
                         reason = None;
                         let current = sequence.unwrap_or_default();
@@ -964,10 +971,15 @@ impl Broker {
         reference: &CredentialReference,
     ) -> Result<String, BrokerError> {
         let tenant = row.run.tenant_id;
-        let reference = resolver_reference(reference)?;
+        let reference =
+            resolver_reference(reference).map_err(|_| denied_at("credential.reference"))?;
         let token = self
             .credentials
-            .resolve(&tenant, &profile_id(profile)?, &reference)
+            .resolve(
+                &tenant,
+                &profile_id(profile).map_err(|_| denied_at("credential.profile"))?,
+                &reference,
+            )
             .await
             .map_err(|error| {
                 tracing::warn!(stage = "credential.resolve", cause = ?error, "broker check denied");

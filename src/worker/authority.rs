@@ -97,12 +97,18 @@ impl From<sqlx::Error> for AuthorityError {
 /// output and its worker calls `model_validate_json`. A nested object would be unreadable by
 /// the Python worker, which is why the Rust API writes strings too.
 pub fn resolved_snapshot(run: &RunRow) -> Result<ResolvedTool, AuthorityError> {
-    let manifest: ToolManifest = serde_json::from_str(member_string(run, "manifest")?)
-        .map_err(|_| AuthorityError::Denied)?;
-    let effective: EffectiveTool = serde_json::from_str(member_string(run, "effective")?)
-        .map_err(|_| AuthorityError::Denied)?;
-    let context: BoundContext =
-        serde_json::from_str(member_string(run, "context")?).map_err(|_| AuthorityError::Denied)?;
+    let manifest: ToolManifest = serde_json::from_str(
+        member_string(run, "manifest").map_err(|_| denied_at("authority.member.manifest"))?,
+    )
+    .map_err(|_| denied_at("authority.member.parse"))?;
+    let effective: EffectiveTool = serde_json::from_str(
+        member_string(run, "effective").map_err(|_| denied_at("authority.member.effective"))?,
+    )
+    .map_err(|_| denied_at("authority.member.parse"))?;
+    let context: BoundContext = serde_json::from_str(
+        member_string(run, "context").map_err(|_| denied_at("authority.member.context"))?,
+    )
+    .map_err(|_| denied_at("authority.member.parse"))?;
     Ok(ResolvedTool {
         manifest,
         effective,
@@ -210,7 +216,10 @@ pub async fn live(
         .find(|candidate| candidate.effective.tool == original.effective.tool)
         .ok_or_else(|| denied_at("authority.tool.membership"))?;
     if serde_json::to_string(&current.manifest).ok().as_deref()
-        != Some(member_string(&row.run, "manifest")?)
+        != Some(
+            member_string(&row.run, "manifest")
+                .map_err(|_| denied_at("authority.member.manifest"))?,
+        )
     {
         return Err(denied_at("authority.manifest"));
     }
@@ -277,13 +286,14 @@ pub async fn live_draft(
         )
         .await
         .map_err(|_| denied_at("draft.tool"))?;
-    let retired_now = retired(store.pool(), run).await.inspect_err(|_error| {
-        tracing::warn!(stage = "authority.draft.retired", "authority check denied")
-    })?;
+    // The short-circuit order is the reference's: the retired probe runs only when the status
+    // check passed, and the stage log rides that probe.
     if !DRAFT_STATUSES.contains(&descriptor.status)
-        || retired_now
+        || retired(store.pool(), run).await.inspect_err(|_error| {
+            tracing::warn!(stage = "authority.draft.retired", "authority check denied")
+        })?
         || serde_json::to_string(&descriptor.manifest).ok().as_deref()
-            != Some(member_string(run, "manifest")?)
+            != Some(member_string(run, "manifest").map_err(|_| denied_at("draft.member.manifest"))?)
     {
         return Err(denied_at("draft.manifest"));
     }
