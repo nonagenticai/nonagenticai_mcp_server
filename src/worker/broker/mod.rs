@@ -82,6 +82,16 @@ pub enum BrokerError {
     OutcomeUnknown,
 }
 
+/// Deny a call, naming the failing check in the log.
+///
+/// The `call` wrapper logs the fixed error type; this names **which** check refused, so an
+/// operator can act on the event without a debug build. The stage is a static label — never a
+/// value, a path or a credential.
+fn denied_at(stage: &'static str) -> BrokerError {
+    tracing::warn!(stage, "broker check denied");
+    BrokerError::Denied
+}
+
 /// The result of one brokered call.
 ///
 /// [`CallOutcome::Expected`] is the reference's `UpstreamStatusError`: an upstream answered a
@@ -343,7 +353,10 @@ impl Broker {
     ) -> Result<CallOutcome, BrokerError> {
         let live = authority::live(&self.store, &self.resolver, row)
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|error| {
+                tracing::warn!(stage = "authority.live", cause = ?error, "broker check denied");
+                BrokerError::Denied
+            })?;
         let profile = &live.profile;
         if self.gateway_credentials() {
             // A minting resolver never holds the gateway licence: the caller's request already
@@ -360,20 +373,20 @@ impl Broker {
                 .iter()
                 .find(|candidate| candidate.id.as_str() == operation_id)
                 .cloned()
-                .ok_or(BrokerError::Denied)?,
+                .ok_or_else(|| denied_at("operation.membership"))?,
         };
         let (operation, status) = self
             .catalog
             .operation(&reference)
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|_| denied_at("operation.catalog"))?;
         let (service, service_status) = self
             .catalog
             .service(&operation.service)
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|_| denied_at("service.catalog"))?;
         if status != VersionStatus::Published || service_status != VersionStatus::Published {
-            return Err(BrokerError::Denied);
+            return Err(denied_at("operation.published"));
         }
         if ownership_reference.is_some()
             && (operation.effect != Effect::ReadOnly
@@ -393,30 +406,35 @@ impl Broker {
             &Value::Object(arguments.clone()),
             &SchemaLimits::default(),
         )
-        .map_err(|_| BrokerError::Denied)?;
+        .map_err(|_| denied_at("validate.input"))?;
         let context_value = live.resolved.context.public_values();
         let context: Map<String, Value> = context_value.as_object().cloned().unwrap_or_default();
 
         let ownership = Ownership { broker: self, row };
         policy::enforce(&operation.scope_rules, arguments, &context, &ownership)
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|_| denied_at("policy"))?;
         if ownership_reference.is_none() {
             for constraints in &live.effective.operation_constraints {
                 if constraints.operation == reference {
                     policy::enforce(&constraints.rules, arguments, &context, &ownership)
                         .await
-                        .map_err(|_| BrokerError::Denied)?;
+                        .map_err(|_| denied_at("policy.constraint"))?;
                 }
             }
         }
-        let (owner, destination) = self.destination(&operation, &service).await?;
+        let (owner, destination) =
+            self.destination(&operation, &service)
+                .await
+                .inspect_err(|_error| {
+                    tracing::warn!(stage = "destination", "broker check denied");
+                })?;
         let tenant = tenant_of(row)?;
         if !self.usable(&tenant, &owner, &operation.service).await? {
-            return Err(BrokerError::Denied);
+            return Err(denied_at("service.usable"));
         }
-        let request =
-            policy::transport(&operation, arguments, &context).map_err(|_| BrokerError::Denied)?;
+        let request = policy::transport(&operation, arguments, &context)
+            .map_err(|_| denied_at("policy.transport"))?;
         let path = request.path;
         let body = request.body;
         let mut query: HashMap<String, String> = request.query.into_iter().collect();
@@ -435,8 +453,18 @@ impl Broker {
                 token
             } else {
                 let reference = Self::licence_credential(profile, &service, &destination)
-                    .ok_or(BrokerError::Denied)?;
-                let token = self.identity(row, profile, reference).await?;
+                    .ok_or_else(|| denied_at("credential.match"))?;
+                let token = self
+                    .identity(row, profile, reference)
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(
+                            stage = "credential.identity",
+                            cause = ?error,
+                            "broker check denied"
+                        );
+                        BrokerError::Denied
+                    })?;
                 credential = Some(reference.clone());
                 token
             };
@@ -457,7 +485,14 @@ impl Broker {
                         &resolver_reference,
                     )
                     .await
-                    .map_err(|_| BrokerError::Denied)?;
+                    .map_err(|error| {
+                        tracing::warn!(
+                            stage = "credential.entry",
+                            cause = ?error,
+                            "broker check denied"
+                        );
+                        BrokerError::Denied
+                    })?;
                 if let Some(oauth) = material.oauth_bearer {
                     if scheme != LicenceScheme::XTenantIdBearer {
                         return Err(BrokerError::Denied);
@@ -531,7 +566,10 @@ impl Broker {
             .min(self.settings.api_max_response_bytes as u64);
         let frame_limit = usize::try_from(live.effective.limits.frame_bytes / 2).unwrap_or(0);
         let call_limit = live.effective.limits.api_calls;
-        let leaks = self.leaks(row, profile, secrets).await?;
+        let leaks = self.leaks(row, profile, secrets).await.map_err(|error| {
+            tracing::warn!(stage = "leaks", cause = ?error, "broker check denied");
+            BrokerError::Denied
+        })?;
         let draft = row.run.mode == "draft" && destination.tenant_owned;
         let writes = operation.effect == Effect::Writes;
 
@@ -549,7 +587,8 @@ impl Broker {
             Rfc4122Uuid::parse(service.service_id.as_str()).ok_or(BrokerError::Denied)?;
         let mut permit = match self.store.permit(row, &service_id).await {
             Ok(permit) => permit,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(stage = "permit", cause = ?error, "broker check denied");
                 if let Some(slot) = slot {
                     slot.release();
                 }
@@ -602,14 +641,24 @@ impl Broker {
                 // charged per actual HTTP attempt, including host ownership reads.
                 authority::live(&self.store, &self.resolver, row)
                     .await
-                    .map_err(|_| Failure::denied(None))?;
+                    .map_err(|error| {
+                        tracing::warn!(
+                            stage = "authority.live.retry",
+                            cause = ?error,
+                            "broker check denied"
+                        );
+                        Failure::denied(None)
+                    })?;
                 if attempt > 0 {
                     let _ = self.store.release_permit(row, &permit).await;
-                    permit = self
-                        .store
-                        .permit(row, &service_id)
-                        .await
-                        .map_err(|_| Failure::denied(None))?;
+                    permit = self.store.permit(row, &service_id).await.map_err(|error| {
+                        tracing::warn!(
+                            stage = "permit.retry",
+                            cause = ?error,
+                            "broker check denied"
+                        );
+                        Failure::denied(None)
+                    })?;
                     sequence = Some(
                         self.store
                             .journal_intent(
@@ -745,6 +794,12 @@ impl Broker {
                         return Ok(CallOutcome::Value(result));
                     }
                     Err(failure) => {
+                        tracing::warn!(
+                            stage = "exchange",
+                            reason = failure.reason,
+                            sent,
+                            "broker check denied"
+                        );
                         reason = failure.reason;
                         if let Some(value) = failure.egress_reset {
                             sent = value;
