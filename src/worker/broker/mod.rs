@@ -430,7 +430,11 @@ impl Broker {
                     tracing::warn!(stage = "destination", "broker check denied");
                 })?;
         let tenant = tenant_of(row)?;
-        if !self.usable(&tenant, &owner, &operation.service).await? {
+        let usable = self
+            .usable(&tenant, &owner, &operation.service)
+            .await
+            .map_err(|_| denied_at("service.usable"))?;
+        if !usable {
             return Err(denied_at("service.usable"));
         }
         let request = policy::transport(&operation, arguments, &context)
@@ -578,17 +582,18 @@ impl Broker {
             Some(
                 self.limiter
                     .acquire(&tenant_key, operation.service.id.as_str())
-                    .map_err(|_| BrokerError::Denied)?,
+                    .map_err(|_| denied_at("limiter"))?,
             )
         } else {
             None
         };
-        let service_id =
-            Rfc4122Uuid::parse(service.service_id.as_str()).ok_or(BrokerError::Denied)?;
+        let service_id = Rfc4122Uuid::parse(service.service_id.as_str())
+            .ok_or_else(|| denied_at("service.identity"))?;
         let mut permit = match self.store.permit(row, &service_id).await {
             Ok(permit) => permit,
-            Err(error) => {
-                tracing::warn!(stage = "permit", cause = ?error, "broker check denied");
+            Err(_error) => {
+                // The store error's message can echo SQL detail; the stage is the safe fact.
+                tracing::warn!(stage = "permit", "broker check denied");
                 if let Some(slot) = slot {
                     slot.release();
                 }
@@ -597,15 +602,15 @@ impl Broker {
         };
 
         let journal_operation = JournalOperation {
-            id: Rfc4122Uuid::parse(reference.id.as_str()).ok_or(BrokerError::Denied)?,
+            id: Rfc4122Uuid::parse(reference.id.as_str())
+                .ok_or_else(|| denied_at("journal.identity"))?,
             version: i32::try_from(reference.version.get()).unwrap_or(i32::MAX),
             effect: effect_text(operation.effect).to_owned(),
             pagination_limit: i64::from(operation.pagination_limit),
         };
         let license_id = match credential.as_ref() {
-            Some(reference) => {
-                Rfc4122Uuid::parse(reference.license_id.as_str()).ok_or(BrokerError::Denied)?
-            }
+            Some(reference) => Rfc4122Uuid::parse(reference.license_id.as_str())
+                .ok_or_else(|| denied_at("journal.licence"))?,
             None => row.run.gateway_license_id,
         };
         let mut sequence: Option<i64> = None;
@@ -633,7 +638,10 @@ impl Broker {
                         Some(trace_path.as_str()),
                     )
                     .await
-                    .map_err(|_| Failure::denied(None))?,
+                    .map_err(|_| {
+                        tracing::warn!(stage = "journal.intent", "broker check denied");
+                        Failure::denied(None)
+                    })?,
             );
             let mut attempt: u32 = 0;
             loop {
@@ -677,7 +685,10 @@ impl Broker {
                 }
                 sent = true;
                 reason = None;
-                let attempt_request = request.try_clone().ok_or_else(|| Failure::denied(None))?;
+                let attempt_request = request.try_clone().ok_or_else(|| {
+                    tracing::warn!(stage = "exchange.clone", "broker check denied");
+                    Failure::denied(None)
+                })?;
                 match self.send(&destination, attempt_request).await {
                     Ok(mut response) => {
                         let status = response.status().as_u16();
@@ -794,12 +805,6 @@ impl Broker {
                         return Ok(CallOutcome::Value(result));
                     }
                     Err(failure) => {
-                        tracing::warn!(
-                            stage = "exchange",
-                            reason = failure.reason,
-                            sent,
-                            "broker check denied"
-                        );
                         reason = failure.reason;
                         if let Some(value) = failure.egress_reset {
                             sent = value;
@@ -844,6 +849,14 @@ impl Broker {
         match exchanged {
             Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(failure)) => {
+                // Terminal: the retry loop has already decided. A retryable failure that later
+                // succeeded never reaches here, so this line is a denial and nothing else.
+                tracing::warn!(
+                    stage = "exchange",
+                    reason = failure.reason.or(reason),
+                    sent,
+                    "broker check denied"
+                );
                 if let Some(current) = sequence {
                     let _ = self
                         .journal_outcome_row(
@@ -868,6 +881,7 @@ impl Broker {
                 })
             }
             Err(_) => {
+                tracing::warn!(stage = "exchange.timeout", sent, "broker check denied");
                 if let Some(current) = sequence {
                     let _ = self
                         .journal_outcome_row(
@@ -910,13 +924,24 @@ impl Broker {
             .credentials
             .resolve(&tenant, &profile_id(profile)?, &reference)
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|error| {
+                tracing::warn!(stage = "credential.resolve", cause = ?error, "broker check denied");
+                BrokerError::Denied
+            })?;
         let identity = self
             .licences
             .authenticate_for_app(&token, reference.app_key.as_str())
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    stage = "credential.introspect",
+                    cause = ?error,
+                    "broker check denied"
+                );
+                BrokerError::Denied
+            })?;
         if identity.tenant_id != tenant || identity.license_id != reference.license_id {
+            tracing::warn!(stage = "credential.mismatch", "broker check denied");
             return Err(BrokerError::Denied);
         }
         Ok(token)
