@@ -4,7 +4,7 @@
 # set (rust is 1-alpine only), so the builder is debian with a pinned toolchain installed by
 # rustup; builder and runtime share one glibc.
 # RUST_TOOLCHAIN must equal rust-toolchain.toml and the toolchain in .github/workflows/ci-public.yml.
-ARG RUST_TOOLCHAIN=1.99.0
+ARG RUST_TOOLCHAIN=1.100.0
 
 FROM debian:12-slim AS build
 ARG RUST_TOOLCHAIN

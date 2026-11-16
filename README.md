@@ -13,7 +13,7 @@ Rust port of the Python implementation archived at
 
 | | |
 |---|---|
-| **Runtime** | Rust 1.99.0 (pinned in `rust-toolchain.toml`), edition 2024 |
+| **Runtime** | Rust 1.100.0 (pinned in `rust-toolchain.toml`), edition 2024 |
 | **Depends on** | PostgreSQL 18; a Kubernetes cluster with a Kata runtime class only when execution is enabled; a licence introspection endpoint only when licence authentication is configured |
 | **Runs on** | Three binaries from one image: `mcp-server-rs` (API), `mcp-worker` (Kata executor) and `mcp-external-driver` (n8n and fr runtimes) |
 
@@ -62,7 +62,7 @@ Rust port of the Python implementation archived at
 
 ## Stack
 
-Rust 1.99.0, edition 2024, axum 0.8, tokio, sqlx 0.9 (runtime queries only, PostgreSQL,
+Rust 1.100.0, edition 2024, axum 0.8, tokio, sqlx 0.9 (runtime queries only, PostgreSQL,
 embedded migrations), `rmcp` 3.9 for the MCP transport, utoipa for OpenAPI, tracing for JSON
 logs, and `kube` for the worker's pod transport.
 
