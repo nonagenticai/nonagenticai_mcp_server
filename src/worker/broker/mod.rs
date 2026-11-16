@@ -687,6 +687,9 @@ impl Broker {
             );
             let mut attempt: u32 = 0;
             loop {
+                // A retry-check failure must not carry the previous attempt's reason onto the
+                // terminal line.
+                reason = None;
                 // Fencing, revocation and budget are rechecked even for retries. Budget is
                 // charged per actual HTTP attempt, including host ownership reads.
                 authority::live(&self.store, &self.resolver, row)

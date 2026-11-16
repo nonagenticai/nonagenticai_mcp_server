@@ -148,8 +148,12 @@ pub async fn live(
     row: &WorkerRow,
 ) -> Result<LiveAuthority, AuthorityError> {
     // The fence first: a stale worker learns nothing and writes nothing.
-    fence_check(store, row).await.inspect_err(|_error| {
-        tracing::warn!(stage = "authority.fence", "authority check denied")
+    fence_check(store, row).await.inspect_err(|error| {
+        tracing::warn!(
+            stage = "authority.fence",
+            class = error.log_class(),
+            "authority check denied"
+        )
     })?;
 
     if row.run.mode == "draft" {
@@ -171,8 +175,12 @@ pub async fn live(
     .map_err(|_| denied_at("authority.binding.identity"))?;
     let binding = bindings::inspect(store.pool(), &tenant, &binding_id)
         .await
-        .inspect_err(|_error| {
-            tracing::warn!(stage = "authority.binding", "authority check denied")
+        .inspect_err(|error| {
+            tracing::warn!(
+                stage = "authority.binding",
+                class = error.log_class(),
+                "authority check denied"
+            )
         })?;
     // Context identity and profile identity are both part of the authority a run was accepted
     // under; a change to either invalidates work already in flight.
