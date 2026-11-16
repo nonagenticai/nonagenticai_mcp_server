@@ -175,12 +175,10 @@ pub async fn live(
     .map_err(|_| denied_at("authority.binding.identity"))?;
     let binding = bindings::inspect(store.pool(), &tenant, &binding_id)
         .await
-        .inspect_err(|error| {
-            tracing::warn!(
-                stage = "authority.binding",
-                class = error.log_class(),
-                "authority check denied"
-            )
+        .inspect_err(|_error| {
+            // The binding read's error is a catalog-store error whose text can echo SQL detail;
+            // the stage is the safe fact.
+            tracing::warn!(stage = "authority.binding", "authority check denied")
         })?;
     // Context identity and profile identity are both part of the authority a run was accepted
     // under; a change to either invalidates work already in flight.
