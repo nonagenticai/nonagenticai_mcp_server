@@ -259,13 +259,20 @@ impl Broker {
     pub async fn preflight(&self, row: &WorkerRow) -> Result<(), BrokerError> {
         let live = authority::live(&self.store, &self.resolver, row)
             .await
-            .map_err(|_| BrokerError::Denied)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    stage = "preflight.authority",
+                    class = error.log_class(),
+                    "broker check denied"
+                );
+                BrokerError::Denied
+            })?;
         let profile = &live.profile;
         let gateway = row.run.gateway_license_id.to_string();
         if self.license_app_key.as_deref() != Some(profile.gateway.app_key.as_str())
             || profile.gateway.license_id.as_str() != gateway
         {
-            return Err(BrokerError::Denied);
+            return Err(denied_at("preflight.gateway"));
         }
         if self.gateway_credentials() {
             self.identity(row, profile, &profile.gateway).await?;
@@ -273,35 +280,48 @@ impl Broker {
         for credential in &profile.services {
             self.identity(row, profile, credential).await?;
         }
-        let tenant = tenant_of(row)?;
+        let tenant = tenant_of(row).map_err(|_| denied_at("preflight.tenant"))?;
         for reference in &live.resolved.manifest.allowed_operations {
             let (operation, status) = self
                 .catalog
                 .operation(reference)
                 .await
-                .map_err(|_| BrokerError::Denied)?;
+                .map_err(|_| denied_at("preflight.operation"))?;
             let (service, service_status) = self
                 .catalog
                 .service(&operation.service)
                 .await
-                .map_err(|_| BrokerError::Denied)?;
+                .map_err(|_| denied_at("preflight.service"))?;
             if status != VersionStatus::Published || service_status != VersionStatus::Published {
-                return Err(BrokerError::Denied);
+                return Err(denied_at("preflight.published"));
             }
-            let (owner, source) = self.destination(&operation, &service).await?;
-            if !self.usable(&tenant, &owner, &operation.service).await? {
-                return Err(BrokerError::Denied);
+            let (owner, source) =
+                self.destination(&operation, &service)
+                    .await
+                    .inspect_err(|_error| {
+                        tracing::warn!(stage = "preflight.destination", "broker check denied");
+                    })?;
+            let usable = self
+                .usable(&tenant, &owner, &operation.service)
+                .await
+                .map_err(|_| denied_at("preflight.usable"))?;
+            if !usable {
+                return Err(denied_at("preflight.usable"));
             }
             if !matches!(source.auth, SourceAuth::Licence { .. }) {
                 // A stored token: no tenant licence to verify.
                 continue;
             }
             if service.auth_adapter == AuthAdapter::Source {
-                self.source_licence(row, &service, &source).await?;
+                self.source_licence(row, &service, &source)
+                    .await
+                    .inspect_err(|_error| {
+                        tracing::warn!(stage = "preflight.source.licence", "broker check denied");
+                    })?;
                 continue;
             }
-            let credential =
-                Self::licence_credential(profile, &service, &source).ok_or(BrokerError::Denied)?;
+            let credential = Self::licence_credential(profile, &service, &source)
+                .ok_or_else(|| denied_at("preflight.credential"))?;
             self.identity(row, profile, credential).await?;
         }
         Ok(())
@@ -456,7 +476,12 @@ impl Broker {
                 _ => unreachable!("checked above"),
             };
             let token = if service.auth_adapter == AuthAdapter::Source {
-                let (reference, token) = self.source_licence(row, &service, &destination).await?;
+                let (reference, token) = self
+                    .source_licence(row, &service, &destination)
+                    .await
+                    .inspect_err(|_error| {
+                        tracing::warn!(stage = "source.licence", "broker check denied");
+                    })?;
                 credential = Some(reference);
                 token
             } else {
@@ -484,12 +509,13 @@ impl Broker {
             if service.auth_adapter != AuthAdapter::Source
                 && let Some(reference) = credential.as_ref()
             {
-                let resolver_reference = resolver_reference(reference)?;
+                let resolver_reference =
+                    resolver_reference(reference).map_err(|_| denied_at("credential.reference"))?;
                 let material = self
                     .credentials
                     .entry(
                         &row.run.tenant_id,
-                        &profile_id(profile)?,
+                        &profile_id(profile).map_err(|_| denied_at("credential.profile"))?,
                         &resolver_reference,
                     )
                     .await
@@ -735,7 +761,10 @@ impl Broker {
                                 excerpt.as_deref(),
                             )
                             .await
-                            .map_err(|_| Failure::denied(None))?;
+                            .map_err(|_| {
+                                tracing::warn!(stage = "journal.outcome", "broker check denied");
+                                Failure::denied(None)
+                            })?;
                             sequence = None;
                             return Ok(CallOutcome::Expected {
                                 status,
@@ -813,7 +842,10 @@ impl Broker {
                             None,
                         )
                         .await
-                        .map_err(|_| Failure::denied(None))?;
+                        .map_err(|_| {
+                            tracing::warn!(stage = "journal.outcome", "broker check denied");
+                            Failure::denied(None)
+                        })?;
                         sequence = None;
                         return Ok(CallOutcome::Value(result));
                     }

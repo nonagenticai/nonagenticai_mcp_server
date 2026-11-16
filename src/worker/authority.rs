@@ -252,37 +252,54 @@ pub async fn live_draft(
     store: &WorkerStore,
     row: &WorkerRow,
 ) -> Result<LiveAuthority, AuthorityError> {
-    fence_check(store, row).await?;
+    fence_check(store, row).await.inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.fence", "authority check denied")
+    })?;
 
     let run = &row.run;
     if run.owner_tenant_id != run.tenant_id {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("draft.owner"));
     }
-    let original = resolved_snapshot(run)?;
+    let original = resolved_snapshot(run).inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.snapshot", "authority check denied")
+    })?;
     let catalog = CatalogRepository::new(store.pool().clone());
-    let tenant = AuthorityId::new(run.tenant_id.to_string()).map_err(|_| AuthorityError::Denied)?;
+    let tenant =
+        AuthorityId::new(run.tenant_id.to_string()).map_err(|_| denied_at("draft.identity"))?;
     let descriptor = catalog
         .get_version(
             &tenant,
-            &Uuid7::new(run.tool_id.to_string()).map_err(|_| AuthorityError::Denied)?,
+            &Uuid7::new(run.tool_id.to_string()).map_err(|_| denied_at("draft.tool.identity"))?,
             PositiveVersion::new(
-                u64::try_from(run.tool_version).map_err(|_| AuthorityError::Denied)?,
+                u64::try_from(run.tool_version).map_err(|_| denied_at("draft.tool.version"))?,
             )
-            .map_err(|_| AuthorityError::Denied)?,
+            .map_err(|_| denied_at("draft.tool.version"))?,
         )
         .await
-        .map_err(|_| AuthorityError::Denied)?;
+        .map_err(|_| denied_at("draft.tool"))?;
+    let retired_now = retired(store.pool(), run).await.inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.retired", "authority check denied")
+    })?;
     if !DRAFT_STATUSES.contains(&descriptor.status)
-        || retired(store.pool(), run).await?
+        || retired_now
         || serde_json::to_string(&descriptor.manifest).ok().as_deref()
             != Some(member_string(run, "manifest")?)
     {
-        return Err(AuthorityError::Denied);
+        return Err(denied_at("draft.manifest"));
     }
-    draft_dependencies(&catalog, &tenant, &descriptor).await?;
-    wall_clock(run, original.effective.limits.wall_seconds)?;
-    let profile: CredentialProfile =
-        serde_json::from_value(run.profile_snapshot.clone()).map_err(|_| AuthorityError::Denied)?;
+    draft_dependencies(&catalog, &tenant, &descriptor)
+        .await
+        .inspect_err(|_error| {
+            tracing::warn!(
+                stage = "authority.draft.dependencies",
+                "authority check denied"
+            )
+        })?;
+    wall_clock(run, original.effective.limits.wall_seconds).inspect_err(|_error| {
+        tracing::warn!(stage = "authority.draft.wall", "authority check denied")
+    })?;
+    let profile: CredentialProfile = serde_json::from_value(run.profile_snapshot.clone())
+        .map_err(|_| denied_at("draft.profile"))?;
     let effective = original.effective.clone();
     Ok(LiveAuthority {
         resolved: original,
