@@ -139,9 +139,10 @@ pub mod crypto {
         }
         let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| SourceError::Crypto)?;
         let (nonce, sealed) = blob.split_at(NONCE_BYTES);
+        let nonce = Nonce::<U12>::try_from(nonce).map_err(|_| SourceError::Crypto)?;
         let plain = cipher
             .decrypt(
-                Nonce::<U12>::from_slice(nonce),
+                &nonce,
                 Payload {
                     msg: sealed,
                     aad: &associated(source_id),
