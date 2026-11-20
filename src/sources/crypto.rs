@@ -14,15 +14,9 @@
 //! as a plain `String`. A caller must treat it as a secret: never log it and never render it
 //! through `Debug`.
 
-// `aes-gcm` 0.10 is the latest release and still exposes its nonce through `generic_array`,
-// which upstream has deprecated ahead of 0.11. The alternative (moving to an unreleased 0.11)
-// would put an RC in the runtime image; the type is stable and the dependency is pinned, so
-// the deprecation is accepted here and nowhere else.
-#![allow(deprecated)]
-
-use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
-use aes_gcm::{AeadCore as _, Aes256Gcm};
+use aes_gcm::aead::array::typenum::U12;
+use aes_gcm::aead::{Aead, Generate as _, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
 use thiserror::Error;
@@ -122,7 +116,7 @@ pub fn encrypt_token(
     // A fixed-size 32-byte key always fits AES-256; the error arm is unreachable but keeps a
     // wrong key length mapped to the reference's key-length message rather than a panic.
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| SourceCryptoError::KeyLength)?;
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = Nonce::<U12>::try_generate().map_err(|_| SourceCryptoError::Unavailable)?;
     let sealed = cipher
         .encrypt(
             &nonce,
@@ -158,7 +152,7 @@ pub fn decrypt_token(
     let (nonce, sealed) = blob.split_at(NONCE_BYTES);
     let plain = cipher
         .decrypt(
-            GenericArray::from_slice(nonce),
+            Nonce::<U12>::from_slice(nonce),
             Payload {
                 msg: sealed,
                 aad: source_id.as_bytes(),
