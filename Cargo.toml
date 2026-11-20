@@ -69,7 +69,7 @@ async-trait = "0.1.89"
 uuid = { version = "1.18.1", features = ["v4", "v7"] }
 # `mcp_sources` stores one sealed secret per source, AES-256-GCM with the source id as
 # associated data (the reference's `sources/crypto.py`).
-aes-gcm = "0.10.3"
+aes-gcm = "0.11.1"
 # The executor's only cluster transport: pod CRUD and the attach websocket. `ws` is the
 # channel-multiplexed attach; rustls matches the rest of the crate.
 kube = { version = "5.1.0", default-features = false, features = [
