@@ -304,6 +304,21 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
             }),
         ),
         (
+            "early_access_request",
+            "Ask for early access to a product: an explicit \"yes\" or \"true\" files the request with the early-access service; anything else only proposes it and sends nothing.\n\nemail: the caller's own address, which the request is bound to; never invent one.\nproduct: the product's slug, exactly as the site names it.\nconfirm: \"yes\" or \"true\" files the request; anything else only proposes it.\nip: the caller's address when care-bus has it; the early-access service records it.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "email": {"type": "string"},
+                    "product": {"type": "string"},
+                    "confirm": {"type": "string"},
+                    "ip": {"type": "string"},
+                },
+                "required": ["email", "product", "confirm"],
+            }),
+        ),
+        (
             "order_create_rma",
             "Create a return authorisation. Idempotent per idempotency_key.",
             json!({
@@ -435,7 +450,7 @@ async fn the_registry_is_the_reference_contract_plus_the_extensions() {
     assert_eq!(
         tools.len(),
         expected.len(),
-        "the care-bus contract is the reference's 13 tools plus faq_search and ebook_request"
+        "the care-bus contract is the reference's 13 tools plus faq_search, ebook_request and early_access_request"
     );
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
@@ -444,6 +459,7 @@ async fn the_registry_is_the_reference_contract_plus_the_extensions() {
             "crm_get_start_data",
             "crm_verify_customer",
             "delivery_track_shipment",
+            "early_access_request",
             "ebook_request",
             "faq_ask",
             "faq_search",

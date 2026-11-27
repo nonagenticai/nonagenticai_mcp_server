@@ -60,7 +60,7 @@ fn gated(name: &str) -> bool {
 /// Tools this port adds beyond the pinned reference's inventory. The fixture is the reference's
 /// own `tools/list` output, so an extension is filtered out of the reference comparison and
 /// asserted directly by `tests/builtin_carebus.rs` instead of being written into the fixture.
-const EXTENSIONS: [&str; 2] = ["faq_search", "ebook_request"];
+const EXTENSIONS: [&str; 3] = ["early_access_request", "ebook_request", "faq_search"];
 
 fn extension(name: &str) -> bool {
     !EXTENSIONS.contains(&name)
