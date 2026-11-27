@@ -99,6 +99,11 @@ pub fn register(provider: &mut BuiltinProvider) {
             "properties": {
                 "conversation_id": {"type": "string"},
                 "reason": {"type": "string"},
+                // care-bus sends this on every side-effect call (mcp_arguments); accepted so the
+                // call is not refused as `invalid arguments: additionalProperties` (measured
+                // 2026-11-27). carebus-api files one handover per conversation, which is the
+                // idempotency that matters here, so the key is not forwarded.
+                "idempotency_key": {"type": "string"},
             },
             "required": ["conversation_id", "reason"],
         })),

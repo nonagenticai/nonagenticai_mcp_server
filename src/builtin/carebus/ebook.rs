@@ -82,6 +82,37 @@ fn optional_text(arguments: &Map<String, Value>, field: &str) -> Result<Option<S
     }
 }
 
+/// The edition's language code (book-fulfillment `isLang`: en, nl, pl, fr, es, de, ar, he).
+///
+/// The care-bus qualifier fills the `language` slot from the visitor's own words, so a live
+/// request arrives as "English" — and book-fulfillment refuses anything that is not a code
+/// (`invalid_language`, measured 2026-11-27). A language NAME (English name or the language's
+/// own name) is mapped to its code here; a code the caller already sent passes through.
+fn language_code(raw: &str) -> String {
+    let lower = raw.trim().to_ascii_lowercase();
+    let known = match lower.as_str() {
+        "english" => Some("en"),
+        "dutch" | "nederlands" => Some("nl"),
+        "polish" | "polski" => Some("pl"),
+        "french" | "français" | "francais" => Some("fr"),
+        "spanish" | "español" | "espanol" => Some("es"),
+        "german" | "deutsch" => Some("de"),
+        "arabic" | "العربية" => Some("ar"),
+        "hebrew" | "עברית" => Some("he"),
+        _ => None,
+    };
+    if let Some(code) = known {
+        return code.to_owned();
+    }
+    // A tag like en-GB / en_US names its base language; an unknown word falls back to the
+    // tool's documented default rather than a guaranteed 400.
+    let base = lower.split(['-', '_']).next().unwrap_or("");
+    if base.len() == 2 && base.chars().all(|c| c.is_ascii_alphabetic()) {
+        return base.to_owned();
+    }
+    "en".to_owned()
+}
+
 /// Register the ebook tool.
 pub fn register(provider: &mut BuiltinProvider) {
     provider.register(BuiltinTool::new(
@@ -95,6 +126,11 @@ pub fn register(provider: &mut BuiltinProvider) {
                 "email": {"type": "string"},
                 "language": {"type": "string", "default": "en"},
                 "ip": {"type": "string"},
+                // care-bus sends this on every side-effect call (mcp_arguments). The request's
+                // idempotency is book-fulfillment's own address+language window, so the key is
+                // accepted and not forwarded; without it in the schema the whole call was
+                // refused as `invalid arguments: additionalProperties` (measured 2026-11-27).
+                "idempotency_key": {"type": "string"},
             },
             "required": ["email"],
         })),
@@ -110,6 +146,7 @@ pub fn register(provider: &mut BuiltinProvider) {
                 }
                 let language = optional_text(&arguments, "language")?
                     .filter(|language| !language.is_empty())
+                    .map(|language| language_code(&language))
                     .unwrap_or_else(|| "en".to_owned());
                 let ip = optional_text(&arguments, "ip")?;
                 // A value reqwest would reject as a header would otherwise surface as a
@@ -125,4 +162,25 @@ pub fn register(provider: &mut BuiltinProvider) {
             })
         }),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::language_code;
+
+    #[test]
+    fn a_language_name_becomes_its_edition_code() {
+        // The qualifier sends the visitor's own wording ("English"); book-fulfillment only
+        // accepts the edition code (isLang) and refused a live request with invalid_language.
+        assert_eq!(language_code("English"), "en");
+        assert_eq!(language_code("Nederlands"), "nl");
+        assert_eq!(language_code("Deutsch"), "de");
+        assert_eq!(language_code("Français"), "fr");
+        assert_eq!(language_code("en-GB"), "en");
+        assert_eq!(language_code("NL"), "nl");
+        assert_eq!(language_code("pl"), "pl");
+        // Unknown words keep the tool's documented default rather than a guaranteed 400.
+        assert_eq!(language_code("Klingon"), "en");
+        assert_eq!(language_code(""), "en");
+    }
 }
