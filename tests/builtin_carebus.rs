@@ -25,7 +25,9 @@ use serde_json::{Value, json};
 
 use mcp_server_rs::builtin::BuiltinProvider;
 use mcp_server_rs::builtin::audit::{AuditError, AuditFuture, AuditSink};
-use mcp_server_rs::builtin::carebus::{self, client, crm, delivery, faq, order, procedures, rules};
+use mcp_server_rs::builtin::carebus::{
+    self, client, crm, delivery, early_access, ebook, faq, handover, order, procedures, rules,
+};
 use mcp_server_rs::builtin::scope::{BuiltinCaller, CallerKind};
 
 // ── a loopback upstream that records every request ────────────────────────────────────────
@@ -1450,4 +1452,198 @@ async fn no_token_set_sends_no_authorization_header() {
         .await
         .expect("an order");
     assert!(!only(&stub).headers.contains_key("authorization"));
+}
+
+// ── ebook, early access, handover ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn ebook_request_mints_and_returns_the_download_link() {
+    let (fulfillment_base, fulfillment) = local_server().await;
+    let (links_base, links) = local_server().await;
+    fulfillment.reply(StatusCode::OK, json!({"state": "sent"}));
+    links.reply(
+        StatusCode::OK,
+        json!({"url": "https://books.test/download/one-time"}),
+    );
+
+    let out = ebook::request_with(
+        &service(&fulfillment_base, "fulfillment-token"),
+        async { Ok::<_, String>(service(&links_base, "links-token")) },
+        "reader@example.test",
+        "en",
+        None,
+    )
+    .await
+    .expect("a sent request");
+
+    let filed = only(&fulfillment);
+    assert_eq!(filed.method, "POST");
+    assert_eq!(filed.path, "/", "BOOK_REQUESTS_URL is the endpoint itself");
+    assert_eq!(
+        json_body(&filed),
+        json!({"email": "reader@example.test", "language": "en"})
+    );
+    let minted = only(&links);
+    assert_eq!(minted.method, "POST");
+    assert_eq!(minted.path, "/internal/download-links");
+    assert_eq!(
+        minted.headers.get("authorization").map(String::as_str),
+        Some("Bearer links-token")
+    );
+    assert_eq!(
+        json_body(&minted),
+        json!({"email": "reader@example.test", "lang": "en", "fresh": true})
+    );
+    assert_eq!(
+        out,
+        json!({
+            "status": "sent",
+            "edition": "en",
+            "email": "reader@example.test",
+            "link": "https://books.test/download/one-time",
+        })
+    );
+}
+
+#[tokio::test]
+async fn ebook_waitlist_never_awaits_the_link_service() {
+    let (fulfillment_base, fulfillment) = local_server().await;
+    let (links_base, links) = local_server().await;
+    fulfillment.reply(StatusCode::OK, json!({"state": "waitlist"}));
+
+    let out = ebook::request_with(
+        &service(&fulfillment_base, "fulfillment-token"),
+        async { Ok::<_, String>(service(&links_base, "links-token")) },
+        "reader@example.test",
+        "de",
+        Some("203.0.113.7"),
+    )
+    .await
+    .expect("a waitlist request");
+
+    assert_eq!(
+        out,
+        json!({"status": "waitlist", "edition": "de", "email": "reader@example.test"})
+    );
+    let filed = only(&fulfillment);
+    assert_eq!(
+        filed.headers.get("cf-connecting-ip").map(String::as_str),
+        Some("203.0.113.7")
+    );
+    assert!(
+        links.requests().is_empty(),
+        "a waitlisted request must mint no link and send no mail"
+    );
+}
+
+#[tokio::test]
+async fn handover_request_posts_the_four_fields_and_returns_the_answer() {
+    let (base, stub) = local_server().await;
+    let answer = json!({"status": "handed_over", "chat_id": "-100123", "thread_id": 7});
+    stub.reply(StatusCode::OK, answer.clone());
+
+    let out = handover::request(
+        &service(&base, "api-token"),
+        "tenant-1",
+        "support",
+        C1,
+        "I need a person",
+    )
+    .await
+    .expect("a handover");
+
+    let request = only(&stub);
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.path, "/api/internal/handover");
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer api-token")
+    );
+    assert_eq!(
+        json_body(&request),
+        json!({
+            "tenant_id": "tenant-1",
+            "job": "support",
+            "conversation_id": C1,
+            "reason": "I need a person",
+        })
+    );
+    assert_eq!(out, answer);
+}
+
+#[test]
+fn handover_refuses_a_blank_reason_before_any_client_is_resolved() {
+    // The refusal lives in `request_arguments`, which cannot reach a client: a blank reason
+    // sends nothing and resolves no env.
+    let arguments = json!({"conversation_id": C1, "reason": "   "});
+    let error = handover::request_arguments(arguments.as_object().expect("an object"))
+        .expect_err("a blank reason refuses");
+    assert_eq!(
+        error,
+        "[permanent] invalid reason: expected the visitor's words"
+    );
+
+    let arguments = json!({"conversation_id": "  ", "reason": "please"});
+    let error = handover::request_arguments(arguments.as_object().expect("an object"))
+        .expect_err("a blank conversation id refuses");
+    assert_eq!(
+        error,
+        "[permanent] invalid conversation_id: expected the conversation to hand over"
+    );
+}
+
+#[tokio::test]
+async fn early_access_file_with_posts_the_consent_and_the_bearer() {
+    let (base, stub) = local_server().await;
+    stub.reply(StatusCode::OK, json!({}));
+
+    early_access::file_with(
+        &base,
+        "kc-token",
+        "caller@example.test",
+        "widget",
+        "req-0001",
+        Some("203.0.113.7"),
+    )
+    .await
+    .expect("a filed request");
+
+    let request = only(&stub);
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.path, "/", "EARLY_ACCESS_URL is the endpoint itself");
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer kc-token")
+    );
+    assert_eq!(
+        request.headers.get("cf-connecting-ip").map(String::as_str),
+        Some("203.0.113.7")
+    );
+    assert_eq!(
+        json_body(&request),
+        json!({
+            "email": "caller@example.test",
+            "product": "widget",
+            "consent": true,
+            "requestId": "req-0001",
+        })
+    );
+}
+
+#[tokio::test]
+async fn early_access_file_with_maps_a_client_error_to_permanent() {
+    let (base, stub) = local_server().await;
+    stub.reply_text(StatusCode::BAD_REQUEST, "no");
+
+    let error = early_access::file_with(
+        &base,
+        "kc-token",
+        "caller@example.test",
+        "widget",
+        "req-0002",
+        None,
+    )
+    .await
+    .expect_err("a 400 refuses");
+    assert_eq!(error, "[permanent] 400 from the early-access service");
 }

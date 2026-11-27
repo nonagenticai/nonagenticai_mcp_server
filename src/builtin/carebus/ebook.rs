@@ -2,6 +2,7 @@
 //! request itself goes to book-fulfillment and — unless it landed on the waitlist — book-links
 //! mints the one-time download link the caller hands back to the reader.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
@@ -19,13 +20,26 @@ ip: the reader's address when care-bus has it; book-fulfillment records it.";
 
 /// File one book request and, unless it is waitlisted, obtain its download link.
 ///
-/// `BOOK_REQUESTS_URL` is book-fulfillment's full request route, so the client's base IS the
-/// endpoint and the request is posted with an empty path; `cf-connecting-ip` rides only when the
-/// caller supplies `ip`. A `state: "waitlist"` answer means there is no link yet: book-links is
-/// never asked, so no token is minted and no mail is sent. Anything else gets `fresh: true`, and
-/// the link is returned to the caller, never logged.
+/// The production path: [`request_with`] over `client::book_links()` (the env path).
 pub async fn request(
     fulfillment: &ServiceClient,
+    email: &str,
+    language: &str,
+    ip: Option<&str>,
+) -> Result<Value, String> {
+    request_with(fulfillment, client::book_links(), email, language, ip).await
+}
+
+/// [`request`] with the link service handed in.
+///
+/// `BOOK_REQUESTS_URL` is book-fulfillment's full request route, so the client's base IS the
+/// endpoint and the request is posted with an empty path; `cf-connecting-ip` rides only when the
+/// caller supplies `ip`. A `state: "waitlist"` answer means there is no link yet: `links` is
+/// never awaited, so no client is built, no token is minted and no mail is sent. Anything else
+/// gets `fresh: true`, and the link is returned to the caller, never logged.
+pub async fn request_with(
+    fulfillment: &ServiceClient,
+    links: impl Future<Output = Result<ServiceClient, String>>,
     email: &str,
     language: &str,
     ip: Option<&str>,
@@ -42,7 +56,7 @@ pub async fn request(
     if filed.get("state").and_then(Value::as_str) == Some("waitlist") {
         return Ok(json!({"status": "waitlist", "edition": language, "email": email}));
     }
-    let links = client::book_links().await?;
+    let links = links.await?;
     let minted = links
         .post(
             "/internal/download-links",

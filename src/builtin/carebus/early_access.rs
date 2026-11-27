@@ -62,14 +62,20 @@ fn request_url() -> Result<String, String> {
         .ok_or_else(|| "[permanent] EARLY_ACCESS_URL is not set on the MCP server".to_owned())
 }
 
-/// File one early-access request.
+/// File one early-access request under an already-resolved route and bearer (`file` resolves both
+/// from the environment).
 ///
-/// `EARLY_ACCESS_URL` is the service's full request route, so the POST goes to that URL itself.
-/// `cf-connecting-ip` rides only when the caller supplies `ip`. Any 2xx is a filed request;
-/// 429 and 5xx are retryable and every other 4xx is permanent. The response body is never read,
-/// so nothing can echo the email back.
-async fn file(url: &str, email: &str, product: &str, ip: Option<&str>) -> Result<(), String> {
-    let token = early_access_token().await?;
+/// The POST goes to `url` itself. `cf-connecting-ip` rides only when the caller supplies `ip`.
+/// Any 2xx is a filed request; 429 and 5xx are retryable and every other 4xx is permanent. The
+/// response body is never read, so nothing can echo the email back.
+pub async fn file_with(
+    url: &str,
+    token: &str,
+    email: &str,
+    product: &str,
+    request_id: &str,
+    ip: Option<&str>,
+) -> Result<(), String> {
     let mut request = reqwest::Client::builder()
         .timeout(Duration::from_secs_f64(client::DEFAULT_TIMEOUT_S))
         .redirect(reqwest::redirect::Policy::none())
@@ -82,7 +88,7 @@ async fn file(url: &str, email: &str, product: &str, ip: Option<&str>) -> Result
             "email": email,
             "product": product,
             "consent": true,
-            "requestId": uuid::Uuid::new_v4().to_string(),
+            "requestId": request_id,
         }));
     if let Some(ip) = ip {
         request = request.header("cf-connecting-ip", ip);
@@ -108,6 +114,14 @@ async fn file(url: &str, email: &str, product: &str, ip: Option<&str>) -> Result
         "[permanent] {} from the early-access service",
         status.as_u16()
     ))
+}
+
+/// File one early-access request: `EARLY_ACCESS_URL` is the service's full request route, so the
+/// POST goes to that URL itself.
+async fn file(url: &str, email: &str, product: &str, ip: Option<&str>) -> Result<(), String> {
+    let token = early_access_token().await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    file_with(url, &token, email, product, &request_id, ip).await
 }
 
 /// The early-access bearer and the instant it stops being reused: its expiry minus 30 s, so no

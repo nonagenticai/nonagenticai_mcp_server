@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::builtin::BuiltinCaller;
 use crate::builtin::{BuiltinProvider, BuiltinTool, boxed};
@@ -35,13 +35,34 @@ fn tenant(caller: &BuiltinCaller) -> Result<String, String> {
         })
 }
 
+/// [`job`] over a lookup (a map in tests).
+fn job_from_lookup(get: &impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    get("CAREBUS_JOB")
+        .filter(|job| !job.trim().is_empty())
+        .ok_or_else(|| "[permanent] CAREBUS_JOB is not set on the MCP server".to_owned())
+}
+
 /// The handover's job key (`CAREBUS_JOB`): the care-bus job the handover belongs to. There is no
 /// compiled default — a public repository names no deployment.
 fn job() -> Result<String, String> {
-    std::env::var("CAREBUS_JOB")
-        .ok()
-        .filter(|job| !job.trim().is_empty())
-        .ok_or_else(|| "[permanent] CAREBUS_JOB is not set on the MCP server".to_owned())
+    job_from_lookup(&|key| std::env::var(key).ok())
+}
+
+/// The handler's two text arguments, refused before any client is resolved: a blank id names no
+/// conversation and a blank reason carries no words for the operator.
+pub fn request_arguments(arguments: &Map<String, Value>) -> Result<(String, String), String> {
+    let conversation_id = text_argument(arguments, "conversation_id")?;
+    if conversation_id.trim().is_empty() {
+        return Err(
+            "[permanent] invalid conversation_id: expected the conversation to hand over"
+                .to_owned(),
+        );
+    }
+    let reason = text_argument(arguments, "reason")?;
+    if reason.trim().is_empty() {
+        return Err("[permanent] invalid reason: expected the visitor's words".to_owned());
+    }
+    Ok((conversation_id, reason))
 }
 
 /// File one handover with carebus-api's internal route. The route opens the operator topic and
@@ -83,21 +104,7 @@ pub fn register(provider: &mut BuiltinProvider) {
         })),
         Arc::new(|caller, arguments| {
             boxed(async move {
-                let conversation_id = text_argument(&arguments, "conversation_id")?;
-                // A blank id names no conversation; refuse before any client is resolved.
-                if conversation_id.trim().is_empty() {
-                    return Err(
-                        "[permanent] invalid conversation_id: expected the conversation to hand over"
-                            .to_owned(),
-                    );
-                }
-                let reason = text_argument(&arguments, "reason")?;
-                // The operator needs the visitor's words; a blank reason is the caller's mistake.
-                if reason.trim().is_empty() {
-                    return Err(
-                        "[permanent] invalid reason: expected the visitor's words".to_owned()
-                    );
-                }
+                let (conversation_id, reason) = request_arguments(&arguments)?;
                 let tenant_id = tenant(&caller)?;
                 let job_key = job()?;
                 let api = client::carebus_api()?;
