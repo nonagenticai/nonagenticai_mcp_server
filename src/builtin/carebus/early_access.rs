@@ -281,6 +281,10 @@ pub fn register(provider: &mut BuiltinProvider) {
                 "product": {"type": "string"},
                 "confirm": {"type": "string"},
                 "ip": {"type": "string"},
+                // care-bus sends this on every side-effect call (mcp_arguments); accepted so the
+                // call is not refused as `invalid arguments: additionalProperties`. The signup
+                // door has its own dedupe, so the key is not forwarded.
+                "idempotency_key": {"type": "string"},
             },
             "required": ["email", "product", "confirm"],
         })),

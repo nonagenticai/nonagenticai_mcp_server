@@ -301,6 +301,7 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
                     "email": {"type": "string"},
                     "language": {"type": "string", "default": "en"},
                     "ip": {"type": "string"},
+                    "idempotency_key": {"type": "string"},
                 },
                 "required": ["email"],
             }),
@@ -316,6 +317,7 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
                     "product": {"type": "string"},
                     "confirm": {"type": "string"},
                     "ip": {"type": "string"},
+                    "idempotency_key": {"type": "string"},
                 },
                 "required": ["email", "product", "confirm"],
             }),
@@ -329,6 +331,7 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
                 "properties": {
                     "conversation_id": {"type": "string"},
                     "reason": {"type": "string"},
+                    "idempotency_key": {"type": "string"},
                 },
                 "required": ["conversation_id", "reason"],
             }),
