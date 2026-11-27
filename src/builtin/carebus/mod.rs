@@ -1,4 +1,5 @@
-//! The care-bus builtin tools: the 13 tools the care-bus executor contract names.
+//! The care-bus builtin tools: the reference's 13 tools plus `faq_search`, the retrieval stage
+//! care-bus's own answer composition calls.
 //!
 //! Ported from the reference `src/builtin/carebus/`. Each tool keeps its reference namespace
 //! (`crm`, `order`, `delivery`, `rules`, `procedures`, `faq`), so its wire name is
