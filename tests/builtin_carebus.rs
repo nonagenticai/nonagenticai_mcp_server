@@ -1573,7 +1573,8 @@ fn the_clients_use_the_reference_timeouts() {
         lookup(configured(&[("STRATA_RAG_URL", "http://rag.test")])),
     )
     .expect("a configured rag client");
-    assert_eq!(rag.timeout(), Duration::from_secs(18));
+    // 280 s: /api/ask now generates (strata's chat budget is 240 s), so the old 18 s cut it off.
+    assert_eq!(rag.timeout(), Duration::from_secs(280));
 
     let rag = client::from_lookup(
         client::Service::StrataRag,
