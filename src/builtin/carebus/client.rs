@@ -30,9 +30,10 @@ use crate::builtin::BuiltinCaller;
 pub const DEFAULT_TIMEOUT_S: f64 = 2.5;
 /// book-fulfillment's request route: a full endpoint, not a base.
 /// `BOOK_REQUESTS_URL` is required; a public repository names no cluster host.
-/// `FAQ_TIMEOUT_S`'s default: a strata_rag `/api/ask` includes vLLM generation, and must stay
-/// below the executor's 20 s faq budget.
-pub const FAQ_TIMEOUT_DEFAULT_S: f64 = 18.0;
+/// `FAQ_TIMEOUT_S`'s default: a strata_rag `/api/ask` includes vLLM generation, which can take
+/// minutes on `local-llm` (strata's own chat timeout is 240 s), so it must sit above that and
+/// below care-bus's 300 s faq tool budget.
+pub const FAQ_TIMEOUT_DEFAULT_S: f64 = 280.0;
 /// The reference's refusal for a licence caller that forwards no strata-rag token.
 pub const X_STRATA_TOKEN_REQUIRED: &str = "[permanent] X-Strata-Token (the tenant's strata-rag licence token) is required for a licence caller";
 
@@ -541,7 +542,7 @@ pub fn strata_rag_from_lookup(
     Ok(base.forwarded(token.to_owned(), caller.tenant_id.clone()))
 }
 
-/// `FAQ_TIMEOUT_S` (default 18): a value that cannot name a positive duration refuses rather
+/// `FAQ_TIMEOUT_S` (default 280): a value that cannot name a positive duration refuses rather
 /// than building a client that panics or times out on every call.
 fn faq_timeout(get: &impl Fn(&str) -> Option<String>) -> Result<f64, String> {
     let Some(raw) = get("FAQ_TIMEOUT_S") else {

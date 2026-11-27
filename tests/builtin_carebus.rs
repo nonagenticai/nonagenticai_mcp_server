@@ -268,6 +268,17 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
                         ],
                         "default": null,
                     },
+                    "instructions": {
+                        "anyOf": [{"type": "string"}, {"type": "null"}],
+                        "default": null,
+                    },
+                    "max_tokens": {
+                        "anyOf": [
+                            {"maximum": 8192, "minimum": 1, "type": "integer"},
+                            {"type": "null"},
+                        ],
+                        "default": null,
+                    },
                 },
                 "required": ["question"],
             }),
@@ -865,6 +876,8 @@ async fn faq_ask_posts_the_hybrid_query_and_shapes_the_citations() {
         &service(&base, "rag-tok"),
         "How long does a refund take?",
         None,
+        None,
+        None,
     )
     .await
     .expect("an answer");
@@ -889,6 +902,7 @@ async fn faq_ask_posts_the_hybrid_query_and_shapes_the_citations() {
     assert_eq!(
         out["sources"],
         json!([{
+            "number": 1,
             "chunk_id": C1,
             "document_id": "d-17",
             "store_path": ["care", "policies", "returns-policy"],
@@ -896,8 +910,9 @@ async fn faq_ask_posts_the_hybrid_query_and_shapes_the_citations() {
             "source": "returns-policy.pdf",
             "page_start": 2,
             "page_end": 3,
+            "text": "long chunk",
         }]),
-        "only a cited chunk is a source, and the chunk text is never returned"
+        "one source per cited document, carrying the passage the answer was generated from"
     );
     assert!(out.get("scope").is_none());
     assert_eq!(out["timings_ms"]["generate"], json!(1300));
@@ -912,7 +927,7 @@ async fn faq_ask_forwards_a_store_filter_and_confirms_it() {
         json!({"answer": "a", "citations": [], "results": []}),
     );
     let scope = faq::leaf_ids(&json!([L1, L2])).expect("a valid filter");
-    let out = faq::ask(&service(&base, "rag-tok"), "q", Some(scope))
+    let out = faq::ask(&service(&base, "rag-tok"), "q", Some(scope), None, None)
         .await
         .expect("an answer");
 
@@ -924,6 +939,144 @@ async fn faq_ask_forwards_a_store_filter_and_confirms_it() {
     assert_eq!(out["citations"], json!([]));
     assert_eq!(out["sources"], json!([]));
     assert_eq!(out["timings_ms"], json!({}));
+}
+
+/// Two chunks of one document, cited together: which shape the answer now comes in.
+fn two_chunk_document(with_documents: bool) -> Value {
+    let mut body = json!({
+        "answer": "Refunds take five business days [1].",
+        "citations": [C2, C1],
+        "results": [
+            {
+                "chunk_id": C1,
+                "document_id": "d-17",
+                "store_path": ["care", "policies"],
+                "ord": 3,
+                "text": "long chunk",
+                "page_start": 2,
+                "page_end": 3,
+                "source": "returns-policy.pdf",
+                "title": "Returns policy",
+            },
+            {
+                "chunk_id": C2,
+                "document_id": "d-17",
+                "store_path": ["care", "policies"],
+                "ord": 4,
+                "text": "second passage",
+                "page_start": 4,
+                "page_end": 4,
+                "source": "returns-policy.pdf",
+                "title": "Returns policy",
+            },
+        ],
+        "timings_ms": {"generate": 900, "total": 1200},
+    });
+    if with_documents {
+        body["documents"] = json!([{
+            "number": 1,
+            "document_id": "d-17",
+            "store_path": ["care", "policies"],
+            "layer": "tenant",
+            "source": "returns-policy.pdf",
+            "title": "Returns policy",
+            "page_start": 2,
+            "page_end": 4,
+            "chunk_ids": [C1, C2],
+        }]);
+    }
+    body
+}
+
+#[tokio::test]
+async fn faq_ask_groups_a_documents_chunks_into_one_numbered_source() {
+    let (base, stub) = local_server().await;
+    stub.reply(StatusCode::OK, two_chunk_document(true));
+    let out = faq::ask(&service(&base, "rag-tok"), "q", None, None, None)
+        .await
+        .expect("an answer");
+
+    assert_eq!(
+        out["citations"],
+        json!([C1]),
+        "one citation per cited document, its first chunk in prompt order"
+    );
+    assert_eq!(
+        out["sources"],
+        json!([{
+            "number": 1,
+            "chunk_id": C1,
+            "document_id": "d-17",
+            "store_path": ["care", "policies"],
+            "title": "Returns policy",
+            "source": "returns-policy.pdf",
+            "page_start": 2,
+            "page_end": 4,
+            "text": "long chunk\n\nsecond passage",
+        }]),
+        "one source for the document, its passages in document order"
+    );
+}
+
+#[tokio::test]
+async fn faq_ask_groups_without_documents_when_the_strata_is_older() {
+    let (base, stub) = local_server().await;
+    stub.reply(StatusCode::OK, two_chunk_document(false));
+    let out = faq::ask(&service(&base, "rag-tok"), "q", None, None, None)
+        .await
+        .expect("an answer");
+
+    assert_eq!(out["citations"], json!([C1]));
+    assert_eq!(out["sources"].as_array().expect("sources").len(), 1);
+    assert_eq!(out["sources"][0]["number"], json!(1));
+    assert_eq!(out["sources"][0]["document_id"], json!("d-17"));
+    assert_eq!(
+        out["sources"][0]["text"],
+        json!("long chunk\n\nsecond passage"),
+        "grouped from the cited chunks and ordered by ord"
+    );
+}
+
+#[tokio::test]
+async fn faq_ask_forwards_the_job_persona_and_the_answer_budget() {
+    let (base, stub) = local_server().await;
+    stub.reply(
+        StatusCode::OK,
+        json!({"answer": "a", "citations": [], "results": []}),
+    );
+    let out = faq::ask(
+        &service(&base, "rag-tok"),
+        "q",
+        None,
+        Some("You are the site host.\n\nBe warm."),
+        Some(1024),
+    )
+    .await
+    .expect("an answer");
+
+    assert_eq!(
+        json_body(&only(&stub)),
+        json!({
+            "query": "q",
+            "route_mode": "hybrid",
+            "top_k": 8,
+            "instructions": "You are the site host.\n\nBe warm.",
+            "max_tokens": 1024,
+        })
+    );
+    assert_eq!(out["citations"], json!([]));
+    assert_eq!(out["sources"], json!([]));
+}
+
+#[tokio::test]
+async fn faq_ask_refuses_an_oversized_persona_before_any_request() {
+    let (base, stub) = local_server().await;
+    let long = "x".repeat(faq::MAX_INSTRUCTIONS_BYTES + 1);
+    let err = faq::ask(&service(&base, "rag-tok"), "q", None, Some(&long), None)
+        .await
+        .expect_err("an oversized persona is refused");
+    assert!(err.starts_with("[permanent]"), "{err}");
+    assert!(stub.requests().is_empty(), "nothing reached the network");
 }
 
 #[tokio::test]
@@ -1072,7 +1225,7 @@ async fn a_licence_caller_searches_its_own_tenant_with_the_forwarded_token() {
 
     let service = client::strata_rag_from_lookup(&caller, lookup)
         .expect("a licence caller's own strata-rag licence is accepted");
-    faq::ask(&service, "How long does a refund take?", None)
+    faq::ask(&service, "How long does a refund take?", None, None, None)
         .await
         .expect("an answer");
 
@@ -1101,7 +1254,9 @@ async fn a_service_caller_keeps_the_pinned_token_and_sends_no_tenant() {
 
     let service = client::strata_rag_from_lookup(&executor(), lookup)
         .expect("a keycloak caller uses the pinned token");
-    faq::ask(&service, "q", None).await.expect("an answer");
+    faq::ask(&service, "q", None, None, None)
+        .await
+        .expect("an answer");
 
     let request = only(&stub);
     assert_eq!(

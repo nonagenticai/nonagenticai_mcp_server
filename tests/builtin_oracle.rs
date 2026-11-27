@@ -71,6 +71,25 @@ fn extension(name: &str) -> bool {
     !EXTENSIONS.contains(&name)
 }
 
+/// `faq_ask` adds two optional arguments the reference does not have (`instructions`, the job's
+/// persona, and `max_tokens`, the answer budget). The pinned fixture is the reference's own
+/// inventory, so the additive keys are removed before the comparison; their exact shape is
+/// asserted by `tests/builtin_carebus.rs` instead.
+const FAQ_ASK_ADDITIONS: [&str; 2] = ["instructions", "max_tokens"];
+
+fn without_additions(name: &str, schema: &Value) -> Value {
+    if name != "faq_ask" {
+        return schema.clone();
+    }
+    let mut schema = schema.clone();
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        for key in FAQ_ASK_ADDITIONS {
+            properties.remove(key);
+        }
+    }
+    schema
+}
+
 fn caller(scope: &str) -> BuiltinCaller {
     BuiltinCaller {
         kind: CallerKind::KeycloakService,
@@ -129,7 +148,8 @@ async fn every_family_tool_matches_the_references_name_description_and_schema() 
             .find(|tool| tool.name == name)
             .unwrap_or_else(|| panic!("{name} is missing from the port"));
         assert_eq!(
-            found.input_schema, expected["input_schema"],
+            without_additions(name, &found.input_schema),
+            without_additions(name, &expected["input_schema"]),
             "{name}: the input schema differs from the reference's"
         );
         assert_eq!(
