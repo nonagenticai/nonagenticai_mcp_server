@@ -290,6 +290,20 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
             }),
         ),
         (
+            "ebook_request",
+            "Request a book: file the request with book-fulfillment and, unless it lands on the waitlist, return the reader's one-time download link.\n\nemail: the reader's own address, which the request and the link are bound to; never invent one.\nlanguage: the edition's language code (default \"en\").\nip: the reader's address when care-bus has it; book-fulfillment records it.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "email": {"type": "string"},
+                    "language": {"type": "string", "default": "en"},
+                    "ip": {"type": "string"},
+                },
+                "required": ["email"],
+            }),
+        ),
+        (
             "order_create_rma",
             "Create a return authorisation. Idempotent per idempotency_key.",
             json!({
@@ -412,7 +426,7 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
 }
 
 #[tokio::test]
-async fn the_registry_is_the_reference_contract_plus_the_faq_search_extension() {
+async fn the_registry_is_the_reference_contract_plus_the_extensions() {
     let mut provider = BuiltinProvider::new();
     carebus::register(&mut provider);
 
@@ -421,7 +435,7 @@ async fn the_registry_is_the_reference_contract_plus_the_faq_search_extension() 
     assert_eq!(
         tools.len(),
         expected.len(),
-        "the care-bus contract is the reference's 13 tools plus faq_search"
+        "the care-bus contract is the reference's 13 tools plus faq_search and ebook_request"
     );
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
@@ -430,6 +444,7 @@ async fn the_registry_is_the_reference_contract_plus_the_faq_search_extension() 
             "crm_get_start_data",
             "crm_verify_customer",
             "delivery_track_shipment",
+            "ebook_request",
             "faq_ask",
             "faq_search",
             "order_create_rma",

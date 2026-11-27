@@ -17,7 +17,7 @@
 //! message ([`X_STRATA_TOKEN_REQUIRED`]), never served from the pinned tenant; a Keycloak caller
 //! (the transition path) uses the pinned `STRATA_RAG_TOKEN` unchanged.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -28,6 +28,13 @@ use crate::builtin::BuiltinCaller;
 
 /// Wall-clock bound on one care-bus backend call; below the executor's 3 s tool timeout.
 pub const DEFAULT_TIMEOUT_S: f64 = 2.5;
+/// book-fulfillment's request route (the `BOOK_REQUESTS_URL` default): a full endpoint, not a
+/// base.
+pub const BOOK_REQUESTS_URL_DEFAULT: &str =
+    "http://book-fulfillment.book-fulfillment.svc.cluster.local:8080/api/requests";
+/// book-links' download-link route (the `BOOK_LINKS_URL` default): the same service, one route.
+pub const BOOK_LINKS_URL_DEFAULT: &str =
+    "http://book-fulfillment.book-fulfillment.svc.cluster.local:8080/internal/download-links";
 /// `FAQ_TIMEOUT_S`'s default: a strata_rag `/api/ask` includes vLLM generation, and must stay
 /// below the executor's 20 s faq budget.
 pub const FAQ_TIMEOUT_DEFAULT_S: f64 = 18.0;
@@ -170,11 +177,29 @@ impl ServiceClient {
 
     /// `POST path` with a JSON body.
     pub async fn post(&self, path: &str, body: Value) -> Result<Value, String> {
+        self.post_with_headers(path, body, &[]).await
+    }
+
+    /// `POST path` with a JSON body and extra headers (book-fulfillment reads
+    /// `cf-connecting-ip`). An empty path means the base URL itself is the endpoint, and the
+    /// error text shows that base rather than an empty path.
+    pub async fn post_with_headers(
+        &self,
+        path: &str,
+        body: Value,
+        headers: &[(&str, &str)],
+    ) -> Result<Value, String> {
         let client = self.client()?;
-        let request = self
-            .request(&client, reqwest::Method::POST, path)
-            .json(&body);
-        self.send(request, "POST", path).await
+        let mut request = self.request(&client, reqwest::Method::POST, path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let shown = if path.is_empty() {
+            self.base_url.as_str()
+        } else {
+            path
+        };
+        self.send(request.json(&body), "POST", shown).await
     }
 
     /// The one HTTP client: no redirects (httpx does not follow them by default) and no
@@ -306,6 +331,200 @@ pub fn demo_backends() -> Result<ServiceClient, String> {
 /// carebus-api (the procedure store).
 pub fn carebus_api() -> Result<ServiceClient, String> {
     from_env(Service::CarebusApi)
+}
+
+/// book-fulfillment's request endpoint.
+///
+/// `BOOK_REQUESTS_URL` is the FULL route ([`BOOK_REQUESTS_URL_DEFAULT`] when unset or empty), so
+/// the client's base is the endpoint itself and the request is posted with an empty path. The
+/// service is internal and takes no bearer.
+pub fn book_fulfillment() -> Result<ServiceClient, String> {
+    Ok(ServiceClient::new(
+        env_or("BOOK_REQUESTS_URL", BOOK_REQUESTS_URL_DEFAULT),
+        None,
+        Duration::from_secs_f64(DEFAULT_TIMEOUT_S),
+    ))
+}
+
+/// book-links, for the one-time download link, under a Keycloak secure-apps client-credentials
+/// bearer.
+pub async fn book_links() -> Result<ServiceClient, String> {
+    book_links_from_lookup(&|key| std::env::var(key).ok()).await
+}
+
+/// [`book_links`] over a lookup (a map in tests).
+pub async fn book_links_from_lookup(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Result<ServiceClient, String> {
+    let base = get("BOOK_LINKS_URL")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| BOOK_LINKS_URL_DEFAULT.to_owned());
+    let token = book_links_token_from_lookup(get).await?;
+    Ok(ServiceClient::new(
+        base,
+        Some(token),
+        Duration::from_secs_f64(DEFAULT_TIMEOUT_S),
+    ))
+}
+
+/// The book-links bearer and the instant it stops being reused: its expiry minus 30 s, so no
+/// call ever rides a token that is about to lapse.
+static BOOK_LINKS_TOKEN_CACHE: LazyLock<Mutex<Option<(String, Instant)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// The book-links bearer: a Keycloak secure-apps client-credentials token, cached across calls.
+/// The token is never logged.
+pub async fn book_links_token() -> Result<String, String> {
+    book_links_token_from_lookup(&|key| std::env::var(key).ok()).await
+}
+
+/// [`book_links_token`] over a lookup (a map in tests).
+pub async fn book_links_token_from_lookup(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Result<String, String> {
+    {
+        // The guard is dropped before the await below: a std mutex is never held across one.
+        let cache = BOOK_LINKS_TOKEN_CACHE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some((token, deadline)) = cache.as_ref()
+            && Instant::now() < *deadline
+        {
+            return Ok(token.clone());
+        }
+    }
+    let (token, deadline) = fetch_book_links_token(get).await?;
+    let mut cache = BOOK_LINKS_TOKEN_CACHE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *cache = Some((token.clone(), deadline));
+    Ok(token)
+}
+
+/// One client-credentials exchange with the Keycloak secure-apps realm. The secret comes from
+/// `BOOK_LINKS_CLIENT_SECRET` or, when that is unset, from the file named by
+/// `BOOK_LINKS_CLIENT_SECRET_FILE`. Neither the secret nor the response body is ever logged.
+async fn fetch_book_links_token(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Result<(String, Instant), String> {
+    let url = required("BOOK_LINKS_TOKEN_URL", get)?;
+    let client_id = required("BOOK_LINKS_CLIENT_ID", get)?;
+    let secret = match get("BOOK_LINKS_CLIENT_SECRET").filter(|secret| !secret.is_empty()) {
+        Some(secret) => secret,
+        None => {
+            let path = required("BOOK_LINKS_CLIENT_SECRET_FILE", get)?;
+            std::fs::read_to_string(&path)
+                .map_err(|error| {
+                    format!("[permanent] cannot read BOOK_LINKS_CLIENT_SECRET_FILE: {error}")
+                })?
+                .trim()
+                .to_owned()
+        }
+    };
+    let form = encode_query(&[
+        ("grant_type", "client_credentials"),
+        ("client_id", &client_id),
+        ("client_secret", &secret),
+    ]);
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs_f64(DEFAULT_TIMEOUT_S))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|error| format!("[permanent] cannot build the book-links token client: {error}"))?
+        .post(&url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(form)
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) if error.is_timeout() => {
+            return Err("[retryable] timeout fetching the book-links token".to_owned());
+        }
+        Err(error) => {
+            return Err(format!(
+                "[retryable] cannot fetch the book-links token: {}",
+                error_class(&error)
+            ));
+        }
+    };
+    let status = response.status();
+    let body = response.bytes().await.map_err(|error| {
+        format!(
+            "[retryable] cannot read the book-links token response: {}",
+            error_class(&error)
+        )
+    })?;
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+        return Err(format!(
+            "[retryable] {} from the book-links token endpoint",
+            status.as_u16()
+        ));
+    }
+    if status.as_u16() >= 400 {
+        // Keycloak's own error pair only; the raw body is never echoed.
+        return Err(format!(
+            "[permanent] {} from the book-links token endpoint: {}",
+            status.as_u16(),
+            keycloak_error(&body)
+        ));
+    }
+    let value: Value = serde_json::from_slice(&body).map_err(|_| {
+        "[permanent] invalid response from the book-links token endpoint".to_owned()
+    })?;
+    let token = value
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            "[permanent] the book-links token endpoint returned no access_token".to_owned()
+        })?
+        .to_owned();
+    let lifetime = value
+        .get("expires_in")
+        .and_then(Value::as_f64)
+        .unwrap_or(60.0);
+    // Reuse stops 30 s before expiry; a lifetime that short is simply not reused.
+    let deadline = Instant::now() + Duration::from_secs_f64((lifetime - 30.0).max(0.0));
+    Ok((token, deadline))
+}
+
+/// One env value, or the compiled default when unset or empty.
+fn env_or(name: &str, default: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_owned())
+}
+
+/// One required env value's refusal: the same shape [`from_lookup`] uses for a base URL.
+fn required(name: &str, get: &impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    get(name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("[permanent] {name} is not set on the MCP server"))
+}
+
+/// Keycloak's own `error`/`error_description` pair from a refusal body; the raw body is never
+/// echoed.
+fn keycloak_error(body: &[u8]) -> String {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return "no error detail".to_owned();
+    };
+    let error = value
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let description = value
+        .get("error_description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match (error.is_empty(), description.is_empty()) {
+        (true, true) => "no error detail".to_owned(),
+        (true, false) => description.to_owned(),
+        (false, true) => error.to_owned(),
+        (false, false) => format!("{error}: {description}"),
+    }
 }
 
 /// strata_rag for this caller.
