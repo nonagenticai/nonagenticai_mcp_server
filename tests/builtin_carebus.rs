@@ -319,6 +319,19 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
             }),
         ),
         (
+            "handover_request",
+            "Hand the conversation to a person: ask care-bus to open an operator handover for it.\n\nconversation_id: the care-bus conversation to hand over, exactly as the session names it.\nreason: the visitor's own words for why they need a person; never invent one.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "conversation_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["conversation_id", "reason"],
+            }),
+        ),
+        (
             "order_create_rma",
             "Create a return authorisation. Idempotent per idempotency_key.",
             json!({
@@ -450,7 +463,7 @@ async fn the_registry_is_the_reference_contract_plus_the_extensions() {
     assert_eq!(
         tools.len(),
         expected.len(),
-        "the care-bus contract is the reference's 13 tools plus faq_search, ebook_request and early_access_request"
+        "the care-bus contract is the reference's 13 tools plus faq_search, ebook_request, early_access_request and handover_request"
     );
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
@@ -463,6 +476,7 @@ async fn the_registry_is_the_reference_contract_plus_the_extensions() {
             "ebook_request",
             "faq_ask",
             "faq_search",
+            "handover_request",
             "order_create_rma",
             "order_create_warranty_claim",
             "order_get_order",

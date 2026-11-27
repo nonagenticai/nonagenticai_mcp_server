@@ -1,10 +1,11 @@
 //! The care-bus builtin tools: the reference's 13 tools plus `faq_search`, the retrieval stage
 //! care-bus's own answer composition calls, `ebook_request`, the website channel's book request,
-//! and `early_access_request`, the website channel's early-access request.
+//! `early_access_request`, the website channel's early-access request, and `handover_request`,
+//! the website channel's handover request.
 //!
 //! Ported from the reference `src/builtin/carebus/`. Each tool keeps its reference namespace
-//! (`crm`, `order`, `delivery`, `rules`, `procedures`, `faq`, `ebook`, `early_access`), so its
-//! wire name is
+//! (`crm`, `order`, `delivery`, `rules`, `procedures`, `faq`, `ebook`, `early_access`,
+//! `handover`), so its wire name is
 //! `{namespace}_{function}` and the scope tables in [`crate::builtin::scope`] grant it exactly
 //! as before. Every tool answers a JSON object as MCP structured content; every failure is a
 //! tool error whose text starts with `[retryable] ` or `[permanent] `.
@@ -18,6 +19,7 @@ pub mod delivery;
 pub mod early_access;
 pub mod ebook;
 pub mod faq;
+pub mod handover;
 pub mod order;
 pub mod procedures;
 pub mod rules;
@@ -37,6 +39,7 @@ pub fn register(provider: &mut BuiltinProvider) {
     faq::register(provider);
     ebook::register(provider);
     early_access::register(provider);
+    handover::register(provider);
 }
 
 /// The MCP success for one tool's JSON answer: the same value as text and as structured
