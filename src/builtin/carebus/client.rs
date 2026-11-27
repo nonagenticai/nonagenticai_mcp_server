@@ -28,13 +28,8 @@ use crate::builtin::BuiltinCaller;
 
 /// Wall-clock bound on one care-bus backend call; below the executor's 3 s tool timeout.
 pub const DEFAULT_TIMEOUT_S: f64 = 2.5;
-/// book-fulfillment's request route (the `BOOK_REQUESTS_URL` default): a full endpoint, not a
-/// base.
-pub const BOOK_REQUESTS_URL_DEFAULT: &str =
-    "http://book-fulfillment.book-fulfillment.svc.cluster.local:8080/api/requests";
-/// book-links' download-link route (the `BOOK_LINKS_URL` default): the same service, one route.
-pub const BOOK_LINKS_URL_DEFAULT: &str =
-    "http://book-fulfillment.book-fulfillment.svc.cluster.local:8080/internal/download-links";
+/// book-fulfillment's request route: a full endpoint, not a base.
+/// `BOOK_REQUESTS_URL` is required; a public repository names no cluster host.
 /// `FAQ_TIMEOUT_S`'s default: a strata_rag `/api/ask` includes vLLM generation, and must stay
 /// below the executor's 20 s faq budget.
 pub const FAQ_TIMEOUT_DEFAULT_S: f64 = 18.0;
@@ -335,12 +330,12 @@ pub fn carebus_api() -> Result<ServiceClient, String> {
 
 /// book-fulfillment's request endpoint.
 ///
-/// `BOOK_REQUESTS_URL` is the FULL route ([`BOOK_REQUESTS_URL_DEFAULT`] when unset or empty), so
-/// the client's base is the endpoint itself and the request is posted with an empty path. The
-/// service is internal and takes no bearer.
+/// `BOOK_REQUESTS_URL` is the FULL route, so the client's base is the endpoint itself and the
+/// request is posted with an empty path. The service is internal and takes no bearer.
 pub fn book_fulfillment() -> Result<ServiceClient, String> {
+    let base = required("BOOK_REQUESTS_URL", &|k| std::env::var(k).ok())?;
     Ok(ServiceClient::new(
-        env_or("BOOK_REQUESTS_URL", BOOK_REQUESTS_URL_DEFAULT),
+        base,
         None,
         Duration::from_secs_f64(DEFAULT_TIMEOUT_S),
     ))
@@ -356,9 +351,7 @@ pub async fn book_links() -> Result<ServiceClient, String> {
 pub async fn book_links_from_lookup(
     get: &impl Fn(&str) -> Option<String>,
 ) -> Result<ServiceClient, String> {
-    let base = get("BOOK_LINKS_URL")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| BOOK_LINKS_URL_DEFAULT.to_owned());
+    let base = required("BOOK_LINKS_URL", get)?;
     let token = book_links_token_from_lookup(get).await?;
     Ok(ServiceClient::new(
         base,
@@ -488,14 +481,6 @@ async fn fetch_book_links_token(
     // Reuse stops 30 s before expiry; a lifetime that short is simply not reused.
     let deadline = Instant::now() + Duration::from_secs_f64((lifetime - 30.0).max(0.0));
     Ok((token, deadline))
-}
-
-/// One env value, or the compiled default when unset or empty.
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.to_owned())
 }
 
 /// One required env value's refusal: the same shape [`from_lookup`] uses for a base URL.

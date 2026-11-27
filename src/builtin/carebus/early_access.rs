@@ -297,7 +297,7 @@ pub fn register(provider: &mut BuiltinProvider) {
                 // The deployment's own gate: a product outside the list is refused the same way
                 // for a proposal and a filing, and before anything is sent.
                 if let Some(products) = allowed_products()
-                    && !products.iter().any(|allowed| *allowed == product)
+                    && !products.contains(&product)
                 {
                     return Err(
                         "[permanent] invalid product: early access is not open for this product"
