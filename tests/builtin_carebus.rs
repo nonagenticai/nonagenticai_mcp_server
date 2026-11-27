@@ -271,6 +271,25 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
             }),
         ),
         (
+            "faq_search",
+            "Search the knowledge stores and return the numbered passages that answer the question.\n\nleaf_ids (care-bus sets it, never the model): search exactly these leaf stores instead of routing\nfrom the tenant's root; care-bus passes the stores outside every legal-matter wall. The result is\nthe retrieval only — care-bus composes and cites the answer from these passages.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "question": {"type": "string"},
+                    "leaf_ids": {
+                        "anyOf": [
+                            {"items": {"type": "string"}, "type": "array"},
+                            {"type": "null"},
+                        ],
+                        "default": null,
+                    },
+                },
+                "required": ["question"],
+            }),
+        ),
+        (
             "order_create_rma",
             "Create a return authorisation. Idempotent per idempotency_key.",
             json!({
@@ -393,7 +412,7 @@ fn contract() -> Vec<(&'static str, &'static str, Value)> {
 }
 
 #[tokio::test]
-async fn the_registry_is_exactly_the_thirteen_tool_contract() {
+async fn the_registry_is_the_reference_contract_plus_the_faq_search_extension() {
     let mut provider = BuiltinProvider::new();
     carebus::register(&mut provider);
 
@@ -402,7 +421,7 @@ async fn the_registry_is_exactly_the_thirteen_tool_contract() {
     assert_eq!(
         tools.len(),
         expected.len(),
-        "the care-bus contract is 13 tools"
+        "the care-bus contract is the reference's 13 tools plus faq_search"
     );
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
@@ -412,6 +431,7 @@ async fn the_registry_is_exactly_the_thirteen_tool_contract() {
             "crm_verify_customer",
             "delivery_track_shipment",
             "faq_ask",
+            "faq_search",
             "order_create_rma",
             "order_create_warranty_claim",
             "order_get_order",
@@ -854,6 +874,81 @@ async fn faq_ask_forwards_a_store_filter_and_confirms_it() {
     assert_eq!(out["citations"], json!([]));
     assert_eq!(out["sources"], json!([]));
     assert_eq!(out["timings_ms"], json!({}));
+}
+
+#[tokio::test]
+async fn faq_search_posts_the_query_and_numbers_the_passages() {
+    let (base, stub) = local_server().await;
+    stub.reply(StatusCode::OK, ask_response());
+    let out = faq::search(
+        &service(&base, "rag-tok"),
+        "How long does a refund take?",
+        None,
+    )
+    .await
+    .expect("sources");
+
+    let request = only(&stub);
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.path, "/api/query");
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer rag-tok")
+    );
+    assert_eq!(
+        json_body(&request),
+        json!({"query": "How long does a refund take?", "route_mode": "hybrid", "top_k": 8}),
+        "retrieval only: no answer and no model-owned arguments"
+    );
+    assert_eq!(out["sources"][0]["n"], json!(1));
+    assert_eq!(out["sources"][0]["chunk_id"], json!(C1));
+    assert_eq!(out["sources"][0]["text"], json!("long chunk"));
+    assert_eq!(out["sources"][0]["title"], json!("Returns policy"));
+    assert_eq!(out["sources"][1]["n"], json!(2));
+    assert_eq!(out["sources"][1]["chunk_id"], json!(C2));
+    assert!(
+        out.get("answer").is_none(),
+        "search returns passages, not an answer"
+    );
+    assert!(out.get("scope").is_none());
+    assert_eq!(out["timings_ms"]["total"], json!(2100));
+}
+
+#[tokio::test]
+async fn faq_search_forwards_a_store_filter_and_confirms_it() {
+    let (base, stub) = local_server().await;
+    stub.reply(StatusCode::OK, json!({"results": [], "timings_ms": {}}));
+    let scope = faq::leaf_ids(&json!([L1])).expect("a valid filter");
+    let out = faq::search(&service(&base, "rag-tok"), "q", Some(scope))
+        .await
+        .expect("sources");
+    assert_eq!(
+        json_body(&only(&stub)),
+        json!({"query": "q", "route_mode": "hybrid", "top_k": 8, "leaf_ids": [L1]})
+    );
+    assert_eq!(out["sources"], json!([]));
+    assert_eq!(out["scope"], json!({"leaf_ids": [L1]}));
+    assert_eq!(out["timings_ms"], json!({}));
+}
+
+#[tokio::test]
+async fn faq_search_refuses_a_bad_store_filter_before_any_request() {
+    let mut provider = BuiltinProvider::new();
+    faq::register(&mut provider);
+    let arguments = json!({"question": "q", "leaf_ids": []})
+        .as_object()
+        .cloned()
+        .expect("an arguments object");
+    let result = provider.call(&executor(), "faq_search", arguments).await;
+    assert_eq!(result.is_error, Some(true));
+    assert!(
+        result.content[0]
+            .as_text()
+            .expect("a text refusal")
+            .text
+            .starts_with("[permanent] leaf_ids"),
+        "the call reached the handler"
+    );
 }
 
 #[test]

@@ -1,4 +1,6 @@
-//! faq tool: namespace `faq`, so `faq_ask`. Answers come from strata_rag `POST /api/ask`.
+//! faq tools: namespace `faq`. `faq_ask` is the reference's answer (`strata_rag POST /api/ask`);
+//! `faq_search` is the care-bus answer stage's retrieval (`POST /api/query`), which returns the
+//! numbered passages so care-bus can compose the answer with the job's own prompt.
 
 use std::sync::Arc;
 
@@ -127,6 +129,66 @@ fn detail(result: &Value, field: &str) -> Value {
     result.get(field).cloned().unwrap_or(Value::Null)
 }
 
+/// The search tool's description: retrieval only, because care-bus owns the answer prompt.
+const SEARCH_DESCRIPTION: &str = "Search the knowledge stores and return the numbered passages that answer the question.\n\n\
+leaf_ids (care-bus sets it, never the model): search exactly these leaf stores instead of routing\n\
+from the tenant's root; care-bus passes the stores outside every legal-matter wall. The result is\n\
+the retrieval only — care-bus composes and cites the answer from these passages.";
+
+/// Search the knowledge stores; the caller (care-bus's answer stage) composes the answer.
+pub async fn search(
+    service: &ServiceClient,
+    question: &str,
+    scope: Option<Vec<Value>>,
+) -> Result<Value, String> {
+    let mut body = Map::new();
+    body.insert("query".to_owned(), Value::String(question.to_owned()));
+    body.insert("route_mode".to_owned(), Value::String("hybrid".to_owned()));
+    body.insert("top_k".to_owned(), Value::from(8));
+    let applied = scope.map(Value::Array);
+    if let Some(stores) = &applied {
+        body.insert("leaf_ids".to_owned(), stores.clone());
+    }
+    let found = service.post("/api/query", Value::Object(body)).await?;
+    let results = found
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Numbered for the answer prompt: the model cites `[n]`, and care-bus maps `n` back to the
+    // chunk when it validates and records the answer.
+    let sources: Vec<Value> = results
+        .iter()
+        .enumerate()
+        .map(|(i, result)| {
+            json!({
+                "n": i + 1,
+                "chunk_id": detail(result, "chunk_id"),
+                "document_id": detail(result, "document_id"),
+                "text": detail(result, "text"),
+                "title": detail(result, "title"),
+                "source": detail(result, "source"),
+                "store_path": detail(result, "store_path"),
+                "page_start": detail(result, "page_start"),
+                "page_end": detail(result, "page_end"),
+            })
+        })
+        .collect();
+    let mut out = Map::new();
+    out.insert("sources".to_owned(), Value::Array(sources));
+    out.insert(
+        "timings_ms".to_owned(),
+        found
+            .get("timings_ms")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new())),
+    );
+    if let Some(stores) = applied {
+        out.insert("scope".to_owned(), json!({"leaf_ids": stores}));
+    }
+    Ok(Value::Object(out))
+}
+
 /// Register the faq tool.
 pub fn register(provider: &mut BuiltinProvider) {
     provider.register(BuiltinTool::new(
@@ -159,6 +221,39 @@ pub fn register(provider: &mut BuiltinProvider) {
                 };
                 let service = client::strata_rag(&caller)?;
                 success(ask(&service, &question, scope).await?)
+            })
+        }),
+    ));
+    provider.register(BuiltinTool::new(
+        "faq",
+        "search",
+        SEARCH_DESCRIPTION,
+        schema(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "question": {"type": "string"},
+                "leaf_ids": {
+                    "anyOf": [
+                        {"items": {"type": "string"}, "type": "array"},
+                        {"type": "null"},
+                    ],
+                    "default": null,
+                },
+            },
+            "required": ["question"],
+        })),
+        Arc::new(|caller, arguments| {
+            boxed(async move {
+                let question = text_argument(&arguments, "question")?;
+                // Validate the filter first, exactly as faq_ask does: a bad one never reaches
+                // the network.
+                let scope = match arguments.get("leaf_ids") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(leaf_ids(value)?),
+                };
+                let service = client::strata_rag(&caller)?;
+                success(search(&service, &question, scope).await?)
             })
         }),
     ));

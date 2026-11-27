@@ -57,6 +57,15 @@ fn gated(name: &str) -> bool {
     name != "legal_uokik_search" && name != "legal_uokik_document"
 }
 
+/// Tools this port adds beyond the pinned reference's inventory. The fixture is the reference's
+/// own `tools/list` output, so an extension is filtered out of the reference comparison and
+/// asserted directly by `tests/builtin_carebus.rs` instead of being written into the fixture.
+const EXTENSIONS: [&str; 1] = ["faq_search"];
+
+fn extension(name: &str) -> bool {
+    !EXTENSIONS.contains(&name)
+}
+
 fn caller(scope: &str) -> BuiltinCaller {
     BuiltinCaller {
         kind: CallerKind::KeycloakService,
@@ -77,6 +86,7 @@ fn listing(provider: &BuiltinProvider, scope: &str) -> Vec<Listed> {
             description: tool.description.as_ref().map(|text| text.to_string()),
             input_schema: Value::Object((*tool.input_schema).clone()),
         })
+        .filter(|tool| extension(&tool.name))
         .collect()
 }
 
