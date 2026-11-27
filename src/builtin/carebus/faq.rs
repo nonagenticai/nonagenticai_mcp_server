@@ -56,7 +56,7 @@ pub fn leaf_ids(value: &Value) -> Result<Vec<Value>, String> {
 }
 
 /// The optional `instructions` argument: a string when given, never anything else.
-fn instructions_argument(arguments: &Value) -> Result<Option<String>, String> {
+fn instructions_argument(arguments: &Map<String, Value>) -> Result<Option<String>, String> {
     match arguments.get("instructions") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
@@ -65,7 +65,7 @@ fn instructions_argument(arguments: &Value) -> Result<Option<String>, String> {
 }
 
 /// The optional `max_tokens` argument: a positive integer within strata_rag's bound.
-fn max_tokens_argument(arguments: &Value) -> Result<Option<u32>, String> {
+fn max_tokens_argument(arguments: &Map<String, Value>) -> Result<Option<u32>, String> {
     match arguments.get("max_tokens") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(n)) => n
