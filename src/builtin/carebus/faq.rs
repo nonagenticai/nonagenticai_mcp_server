@@ -181,7 +181,7 @@ fn document_sources(answer: &Value) -> (Vec<Value>, Vec<Value>) {
                 .cloned()
                 .unwrap_or_default();
             // The document's first cited chunk, in its prompt order, is the representative.
-            let Some(first) = ids.iter().find(|id| cited.contains(id)) else {
+            let Some(first) = ids.iter().find(|id| cited.contains(*id)) else {
                 continue;
             };
             let text = ids
