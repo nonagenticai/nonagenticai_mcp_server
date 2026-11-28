@@ -42,8 +42,8 @@ pub const LICENCE_SCOPE_PREFIX: &str = "licence:";
 /// The builder's scope key (`LICENCE_SCOPE_PREFIX + MCP_LICENCE_APP`).
 pub const MCP_LICENCE_SCOPE: &str = "licence:mcp";
 
-/// The nine care-bus family namespaces (the reference's 13 tools; the port adds `faq_search`,
-/// `ebook_request`, `early_access_request` and `handover_request`).
+/// The nine care-bus family namespaces (the reference's 13 tools; the port adds `ebook_request`,
+/// `early_access_request` and `handover_request`).
 pub const CAREBUS_NAMESPACES: &[&str] = &[
     "crm",
     "order",
