@@ -1,7 +1,6 @@
-//! The care-bus builtin tools: the reference's 13 tools plus `faq_search`, the retrieval stage
-//! care-bus's own answer composition calls, `ebook_request`, the website channel's book request,
-//! `early_access_request`, the website channel's early-access request, and `handover_request`,
-//! the website channel's handover request.
+//! The care-bus builtin tools: the reference's 13 tools plus `ebook_request`, the website
+//! channel's book request, `early_access_request`, the website channel's early-access request, and
+//! `handover_request`, the website channel's handover request.
 //!
 //! Ported from the reference `src/builtin/carebus/`. Each tool keeps its reference namespace
 //! (`crm`, `order`, `delivery`, `rules`, `procedures`, `faq`, `ebook`, `early_access`,
